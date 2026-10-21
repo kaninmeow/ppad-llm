@@ -1,6 +1,7 @@
 import base64
 import json
 import threading
+import time
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
@@ -10,6 +11,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from test_wechat import APPID, KEY, TOKEN, envelope, params
 
 from app.main import create_app
 from app.settings import Settings
@@ -64,15 +66,35 @@ def completion(result=None, *, content=None, finish_reason="stop"):
 
 @contextmanager
 def api(handler=None, **overrides):
+    security = dict(
+        wechat_app_id=APPID,
+        wechat_app_secret="test-app-secret",
+        wechat_callback_token=TOKEN,
+        wechat_encoding_aes_key=base64.b64encode(KEY).decode().rstrip("="),
+        public_base_url="https://public.example",
+    )
+    security.update(overrides)
     settings = Settings(
         _env_file=None,
-        dashscope_api_key=overrides.pop("dashscope_api_key", TEST_KEY),
+        dashscope_api_key=security.pop("dashscope_api_key", TEST_KEY),
         qwen_base_url="https://mock.example/compatible-mode/v1",
-        **overrides,
+        **security,
     )
     requests = []
 
     def record(request):
+        if request.url.host == "api.weixin.qq.com":
+            if request.url.path == "/sns/jscode2session":
+                return httpx.Response(200, json={"openid": "user-1"})
+            if request.url.path == "/cgi-bin/stable_token":
+                return httpx.Response(
+                    200, json={"access_token": "token", "expires_in": 7200}
+                )
+            if request.url.path == "/wxa/media_check_async":
+                return httpx.Response(200, json={"errcode": 0, "trace_id": "trace-1"})
+            return httpx.Response(
+                200, json={"errcode": 0, "result": {"suggest": "pass"}}
+            )
         requests.append(request)
         if handler:
             return handler(request)
@@ -84,12 +106,57 @@ def api(handler=None, **overrides):
         yield client, requests
 
 
-def upload(client, data=None, description="", filename="leaf.png", mime="image/png"):
+def queue(
+    client,
+    data=None,
+    description="",
+    filename="leaf.png",
+    mime="image/png",
+    login_code="fresh-code",
+):
     return client.post(
         "/api/diagnose",
         files={"image": (filename, image_bytes() if data is None else data, mime)},
-        data={"description": description},
+        data={"description": description, "login_code": login_code},
     )
+
+
+def callback(client, trace="trace-1", **changes):
+    event = {
+        "MsgType": "event",
+        "Event": "wxa_media_check",
+        "appid": APPID,
+        "version": 2,
+        "errcode": 0,
+        "trace_id": trace,
+        "result": {"suggest": "pass"},
+    }
+    event.update(changes)
+    encrypted = envelope(json.dumps(event).encode())
+    return client.post(
+        "/api/wechat/callback", params=params(encrypted), json={"Encrypt": encrypted}
+    )
+
+
+def poll(client, queued):
+    details = queued.json()
+    for _ in range(200):
+        response = client.get(
+            "/api/diagnose/" + details["job_id"],
+            headers={"Authorization": "Bearer " + details["job_token"]},
+        )
+        if response.status_code != 202:
+            return response
+        time.sleep(0.005)
+    raise AssertionError("Job did not finish")
+
+
+def upload(client, *args, **kwargs):
+    queued = queue(client, *args, **kwargs)
+    if queued.status_code != 202:
+        return queued
+    assert callback(client).status_code == 200
+    return poll(client, queued)
 
 
 def assert_error(response, status, code):
@@ -111,6 +178,7 @@ def test_health_is_local_and_never_reveals_key(configured):
     assert response.json() == {
         "status": "ok",
         "configured": configured,
+        "security_configured": True,
         "model": "qwen3.8-flash",
         "limits": {"max_upload_bytes": 8388608},
     }
