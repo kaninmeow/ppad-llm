@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Tomato image diagnosis MVP with FastAPI and Qwen-VL"
 requires-python = ">=3.11"
 dependencies = [
+    "cryptography>=44,<48",
     "fastapi>=0.115,<1",
     "httpx>=0.28,<1",
     "pillow>=11,<13",
