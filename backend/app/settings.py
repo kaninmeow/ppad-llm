@@ -12,6 +12,7 @@ class Settings(BaseSettings):
         env_file=Path(__file__).resolve().parents[1] / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     dashscope_api_key: SecretStr = SecretStr("")

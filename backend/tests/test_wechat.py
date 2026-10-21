@@ -5,6 +5,7 @@ import json
 import logging
 import struct
 import time
+import traceback
 
 import httpx
 import pytest
@@ -69,6 +70,15 @@ def test_settings_configuration_and_defaults():
 def test_settings_reject_invalid_aes_key(key):
     with pytest.raises(ValidationError):
         settings(wechat_encoding_aes_key=key)
+
+
+def test_settings_validation_error_and_traceback_hide_invalid_secret():
+    invalid_secret = "SENSITIVE_INVALID_AES_KEY_NEVER_LOG"
+    with pytest.raises(ValidationError) as exc:
+        settings(wechat_encoding_aes_key=invalid_secret)
+    assert invalid_secret not in str(exc.value)
+    assert invalid_secret not in "".join(traceback.format_exception(exc.value))
+    assert "WECHAT_ENCODING_AES_KEY must encode 32 bytes" in str(exc.value)
 
 
 def test_login_token_cache_text_and_media_contract(caplog):
