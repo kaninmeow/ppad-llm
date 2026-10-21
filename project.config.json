@@ -1,0 +1,8 @@
+{
+  "description": "番茄病害照片初步识别 MVP",
+  "miniprogramRoot": "miniprogram/",
+  "compileType": "miniprogram",
+  "appid": "touristappid",
+  "projectname": "tomato-observation",
+  "setting": { "urlCheck": false, "es6": true, "minified": true }
+}

@@ -1,0 +1,11 @@
+{
+  "pages": ["pages/index/index"],
+  "window": {
+    "navigationBarTitleText": "番茄观察室",
+    "navigationBarBackgroundColor": "#F7F6EF",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#F7F6EF"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

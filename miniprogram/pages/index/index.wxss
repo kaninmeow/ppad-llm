@@ -1,0 +1,83 @@
+.page { padding: 36rpx 32rpx 44rpx; padding-bottom: calc(44rpx + env(safe-area-inset-bottom)); }
+.hero { position: relative; padding: 12rpx 0 42rpx; }
+.eyebrow { display: flex; align-items: center; gap: 10rpx; font-size: 21rpx; letter-spacing: 2rpx; color: #62765f; font-weight: 600; }
+.tiny-leaf { width: 20rpx; height: 13rpx; border-radius: 14rpx 0; background: #678855; transform: rotate(-25deg); }
+.hero-title { margin-top: 24rpx; font-size: 48rpx; font-weight: 700; letter-spacing: -1rpx; position: relative; z-index: 1; }
+.hero-copy { margin-top: 14rpx; font-size: 25rpx; color: #6c7868; max-width: 510rpx; line-height: 1.7; position: relative; z-index: 1; }
+.hero-note { margin-top: 20rpx; font-size: 20rpx; color: #71806c; }
+.tomato-art { position: absolute; right: 4rpx; top: 98rpx; width: 85rpx; height: 79rpx; background: #d98568; border-radius: 46% 45% 49% 49%; transform: rotate(12deg); opacity: .7; }
+.tomato-leaf { position: absolute; background: #66815b; width: 36rpx; height: 17rpx; top: -7rpx; left: 15rpx; border-radius: 0 90% 0 90%; transform: rotate(20deg); }
+.leaf-two { left: 39rpx; transform: rotate(100deg); }
+.tomato-shine { position: absolute; top: 18rpx; left: 16rpx; width: 11rpx; height: 25rpx; background: #eeb49b; border-radius: 50%; transform: rotate(20deg); }
+.card { background: #fffef9; border: 1rpx solid #e7e9dc; border-radius: 32rpx; padding: 32rpx 28rpx; box-shadow: 0 8rpx 32rpx rgba(40, 66, 42, .035); }
+.section-heading { display: flex; align-items: center; gap: 14rpx; }
+.step { font-size: 23rpx; font-weight: 600; color: #6b885e; }
+.section-title { font-size: 29rpx; font-weight: 600; }
+.required, .optional { margin-left: auto; font-size: 21rpx; color: #85907b; }
+.photo-empty { margin-top: 26rpx; padding: 32rpx 14rpx 24rpx; background: #f1f4e9; border: 2rpx dashed #d5dfc7; border-radius: 24rpx; text-align: center; }
+.photo-frame { width: 72rpx; height: 60rpx; border: 3rpx solid #829d70; border-radius: 13rpx; margin: 4rpx auto 22rpx; position: relative; }
+.frame-leaf { width: 27rpx; height: 18rpx; background: #a3b78d; border-radius: 23rpx 0; position: absolute; top: 13rpx; left: 20rpx; transform: rotate(-18deg); }
+.frame-line { width: 28rpx; height: 3rpx; background: #829d70; position: absolute; bottom: 12rpx; left: 18rpx; transform: rotate(-27deg); }
+.photo-title { font-size: 27rpx; font-weight: 600; }
+.photo-tip { color: #7b8772; font-size: 22rpx; margin-top: 10rpx; line-height: 1.7; }
+.choose-button { display: inline-block; background: #fffef9; color: #33583c; font-size: 25rpx; padding: 18rpx 32rpx; border: 1rpx solid #d9e1cd; margin-top: 26rpx; border-radius: 18rpx; }
+.file-tip { color: #87917d; font-size: 19rpx; margin-top: 20rpx; }
+.photo-selected { margin-top: 24rpx; }
+.photo { display: block; width: 100%; height: 360rpx; border-radius: 22rpx; background: #edf0e7; }
+.photo-actions { display: flex; align-items: center; margin-top: 12rpx; }
+.preview-hint { font-size: 21rpx; color: #87917d; margin-right: auto; }
+.text-button { padding: 12rpx 14rpx; font-size: 24rpx; background: transparent; color: #416a42; line-height: 1.4; }
+.remove-button { color: #96725d; }
+.divider { height: 1rpx; background: #eeeee3; margin: 30rpx 0; }
+.description { display: block; width: 100%; height: 170rpx; padding: 22rpx; margin-top: 24rpx; border-radius: 20rpx; background: #f6f7f0; font-size: 25rpx; line-height: 1.7; color: #324c36; }
+.placeholder { color: #929b89; }
+.description-footer { display: flex; justify-content: space-between; gap: 10rpx; color: #939b8c; font-size: 19rpx; margin-top: 13rpx; }
+.consent { display: flex; gap: 12rpx; align-items: flex-start; margin: 26rpx 8rpx 22rpx; color: #7d8776; font-size: 21rpx; line-height: 1.7; }
+.consent-dot { width: 8rpx; height: 8rpx; border-radius: 50%; background: #94a383; flex-shrink: 0; margin-top: 14rpx; }
+.primary-button { width: 100%; padding: 26rpx; background: #244d35; color: #fffef7; font-weight: 600; font-size: 29rpx; letter-spacing: 1rpx; }
+.primary-button[disabled] { background: #dce3d4; color: #85947d; }
+.button-arrow { margin-left: 16rpx; font-weight: 400; }
+.progress-panel { margin-top: 24rpx; padding: 24rpx; background: #eaf0df; border-radius: 22rpx; }
+.progress-title { font-size: 25rpx; }
+.progress-track { height: 7rpx; background: #d7e0cb; margin-top: 18rpx; overflow: hidden; border-radius: 8rpx; }
+.progress-fill { height: 100%; background: #6b8b54; transition: width .2s; border-radius: 8rpx; }
+.progress-note { font-size: 21rpx; color: #7c896d; margin-top: 13rpx; }
+.error-panel { margin-top: 24rpx; padding: 26rpx; background: #f7eae1; border: 1rpx solid #ecd6c6; border-radius: 22rpx; color: #85523b; }
+.error-title { font-size: 27rpx; font-weight: 600; }
+.error-copy { margin-top: 10rpx; font-size: 25rpx; line-height: 1.7; overflow-wrap: break-word; }
+.error-hint { font-size: 21rpx; margin-top: 10rpx; color: #a17e66; }
+.result-card { margin-top: 30rpx; }
+.result-eyebrow { font-size: 21rpx; color: #819075; letter-spacing: 2rpx; margin-bottom: 22rpx; }
+.status-badge { display: inline-block; padding: 10rpx 18rpx; background: #e9efdf; color: #53723d; border-radius: 12rpx; font-size: 25rpx; font-weight: 600; }
+.status-suspected_disease { background: #f4e8d6; color: #977343; }
+.status-uncertain, .status-not_tomato { background: #eeeee6; color: #737967; }
+.disease-name { font-size: 38rpx; font-weight: 700; margin-top: 22rpx; }
+.summary { margin-top: 20rpx; font-size: 27rpx; line-height: 1.85; color: #4f624c; overflow-wrap: break-word; }
+.result-section { margin-top: 30rpx; border-top: 1rpx solid #ebeee2; padding-top: 26rpx; }
+.result-heading { font-size: 27rpx; font-weight: 600; margin-bottom: 16rpx; }
+.likelihood-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin-bottom: 18rpx; }
+.likelihood-heading .result-heading { margin-bottom: 0; }
+.estimate-label { color: #718268; background: #eef2e6; padding: 6rpx 14rpx; border-radius: 10rpx; font-size: 20rpx; flex-shrink: 0; }
+.primary-candidate { background: #f0f4e7; border-radius: 18rpx; padding: 22rpx; }
+.candidate-label { font-size: 20rpx; color: #7b8b6a; margin-bottom: 10rpx; }
+.likelihood-row { display: flex; align-items: baseline; justify-content: space-between; gap: 20rpx; }
+.candidate-name { flex: 1; min-width: 0; font-size: 26rpx; font-weight: 600; color: #4e6842; overflow-wrap: break-word; }
+.likelihood-value { flex-shrink: 0; font-size: 32rpx; font-weight: 700; color: #42663c; }
+.likelihood-track { height: 10rpx; border-radius: 10rpx; background: #e0e6d7; overflow: hidden; margin: 14rpx 0; }
+.likelihood-fill { height: 100%; background: #6b8b54; border-radius: 10rpx; }
+.alternative-fill { background: #a3b58c; }
+.alternatives-heading { font-size: 24rpx; color: #6e7f61; font-weight: 600; margin-top: 24rpx; }
+.alternative-candidate { margin-top: 18rpx; padding-bottom: 16rpx; border-bottom: 1rpx solid #eef0e7; }
+.alternative-candidate .likelihood-value { font-size: 28rpx; color: #7b8c68; }
+.candidate-empty, .likelihood-notice { font-size: 21rpx; line-height: 1.8; color: #89937e; margin-top: 16rpx; }
+.list-row { display: flex; align-items: flex-start; gap: 14rpx; font-size: 25rpx; color: #63735a; line-height: 1.8; margin-top: 12rpx; overflow-wrap: break-word; }
+.list-row > text:last-child { flex: 1; min-width: 0; }
+.bullet { color: #77925f; font-weight: 700; }
+.cause { margin-top: 18rpx; }
+.cause-name { font-size: 25rpx; color: #4e6842; font-weight: 600; }
+.cause-reason { color: #7a866f; margin-top: 6rpx; font-size: 24rpx; line-height: 1.8; overflow-wrap: break-word; }
+.recommendation-panel { background: #f1f4e8; padding: 24rpx 22rpx; border: 0; border-radius: 20rpx; }
+.number { background: #e0e8d3; color: #64814e; border-radius: 50%; min-width: 35rpx; height: 35rpx; text-align: center; font-size: 21rpx; line-height: 35rpx; margin-top: 6rpx; }
+.result-notice { font-size: 21rpx; line-height: 1.8; color: #949b88; margin-top: 28rpx; padding-top: 22rpx; border-top: 1rpx solid #ebeee2; }
+.footer { display: flex; flex-direction: column; align-items: center; color: #a1a893; font-size: 20rpx; line-height: 1.8; padding: 34rpx 0 0; }
+.footer-line { height: 1rpx; width: 42rpx; background: #d5dcc9; margin: 12rpx 0; }

@@ -1,0 +1,71 @@
+<view class="page">
+  <view class="hero">
+    <view class="eyebrow"><view class="tiny-leaf"></view> 番茄观察室 · PHOTO CHECK</view>
+    <view class="hero-title">看看番茄怎么了</view>
+    <view class="hero-copy">从一张照片开始，了解可见症状与照护方向。</view>
+    <view class="hero-note">AI 辅助初步识别 · 仅供种植参考</view>
+    <view class="tomato-art" aria-hidden="true"><view class="tomato-leaf leaf-one"></view><view class="tomato-leaf leaf-two"></view><view class="tomato-shine"></view></view>
+  </view>
+
+  <view class="card input-card">
+    <view class="section-heading"><text class="step">01</text><text class="section-title">给它拍张照片</text><text class="required">必选</text></view>
+    <view wx:if="{{!photoPath}}" class="photo-empty">
+      <view class="photo-frame"><view class="frame-leaf"></view><view class="frame-line"></view></view>
+      <view class="photo-title">把不对劲的地方拍清楚</view>
+      <view class="photo-tip">叶片、果实或茎部均可，尽量使用自然光</view>
+      <button class="choose-button" bindtap="choosePhoto" disabled="{{busy || choosing}}" loading="{{choosing}}">拍照 / 从相册选择</button>
+      <view class="file-tip">单张照片 · JPEG / PNG / WebP · 最大 8 MB</view>
+    </view>
+    <view wx:else class="photo-selected">
+      <image class="photo" src="{{photoPath}}" mode="aspectFit" bindtap="previewPhoto" aria-label="查看所选照片大图"></image>
+      <view class="photo-actions"><text class="preview-hint">点击照片查看大图</text><button class="text-button" bindtap="choosePhoto" disabled="{{busy || choosing}}">更换</button><button class="text-button remove-button" bindtap="removePhoto" disabled="{{busy || choosing}}">移除</button></view>
+    </view>
+    <view class="divider"></view>
+    <view class="section-heading"><text class="step">02</text><text class="section-title">再补充一点线索</text><text class="optional">选填</text></view>
+    <textarea class="description" value="{{description}}" bindinput="onDescriptionInput" maxlength="500" disabled="{{busy || choosing}}" placeholder="例如：下部叶片先出现黄斑，近两天浇水较多，已持续 3 天……" placeholder-class="placeholder" auto-height="{{false}}" show-confirm-bar="{{false}}" adjust-position="{{true}}" />
+    <view class="description-footer"><text>症状出现多久？哪些部位有变化？</text><text>{{description.length}}/500</text></view>
+  </view>
+
+  <view class="consent"><view class="consent-dot"></view><text>点击识别后，照片和描述将发送至云端模型进行分析。</text></view>
+  <button class="primary-button" bindtap="recognize" disabled="{{busy || choosing || !photoPath}}" loading="{{busy}}">{{busy ? '正在识别，请稍候' : (error ? '重新识别' : '开始初步识别')}}<text wx:if="{{!busy}}" class="button-arrow">↗</text></button>
+
+  <view wx:if="{{busy}}" class="progress-panel" role="status">
+    <view class="progress-title">{{uploadComplete ? '照片已上传，正在分析可见症状…' : '正在上传照片 ' + uploadProgress + '%'}}</view>
+    <view class="progress-track"><view class="progress-fill" style="width: {{uploadProgress}}%;"></view></view>
+    <view class="progress-note">{{uploadComplete ? '分析需要一点时间，请保持页面打开。' : '此进度仅表示照片上传情况。'}}</view>
+  </view>
+
+  <view wx:if="{{error}}" class="error-panel" role="alert"><view class="error-title">这次还没完成</view><view class="error-copy">{{error}}</view><view wx:if="{{photoPath}}" class="error-hint">照片和描述已保留，可点击上方按钮重试。</view></view>
+
+  <view wx:if="{{resultView}}" class="card result-card">
+    <view class="result-eyebrow">本次观察 · 初步结果</view>
+    <view class="status-badge status-{{resultView.status}}">{{resultView.label}}</view>
+    <view wx:if="{{resultView.disease_name}}" class="disease-name">{{resultView.disease_name}}</view>
+    <view class="summary">{{resultView.summary}}</view>
+    <view wx:if="{{resultView.primaryDisease}}" class="result-section likelihood-section">
+      <view class="likelihood-heading"><text class="result-heading">病害可能性</text><text class="estimate-label">模型估计</text></view>
+      <view class="primary-candidate">
+        <view class="candidate-label">当前疑似病害</view>
+        <view class="likelihood-row"><text class="candidate-name">{{resultView.primaryDisease.name}}</text><text class="likelihood-value">{{resultView.primaryDisease.likelihood}}%</text></view>
+        <view class="likelihood-track"><view class="likelihood-fill" style="width: {{resultView.primaryDisease.likelihood}}%;"></view></view>
+        <view class="cause-reason">{{resultView.primaryDisease.reason}}</view>
+      </view>
+      <view class="alternatives-heading">其他可能病害</view>
+      <view wx:if="{{resultView.alternativeDiseases.length}}">
+        <view wx:for="{{resultView.alternativeDiseases}}" wx:key="name" class="alternative-candidate">
+          <view class="likelihood-row"><text class="candidate-name">{{item.name}}</text><text class="likelihood-value">{{item.likelihood}}%</text></view>
+          <view class="likelihood-track"><view class="likelihood-fill alternative-fill" style="width: {{item.likelihood}}%;"></view></view>
+          <view class="cause-reason">{{item.reason}}</view>
+        </view>
+      </view>
+      <view wx:else class="candidate-empty">暂无足够证据列出其他病害。</view>
+      <view class="likelihood-notice">以上为模型估计，未经准确率校准，不是确诊概率。仅供候选比较，各项不要求合计 100%；未列出的病害也不能排除。</view>
+    </view>
+    <view wx:if="{{resultView.observed_symptoms.length}}" class="result-section"><view class="result-heading">照片里的线索</view><view wx:for="{{resultView.observed_symptoms}}" class="list-row"><text class="bullet">·</text><text>{{item}}</text></view></view>
+    <view wx:if="{{resultView.possible_causes.length}}" class="result-section"><view class="result-heading">可能的原因</view><view wx:for="{{resultView.possible_causes}}" class="cause"><view class="cause-name">{{item.name}}</view><view class="cause-reason">{{item.reason}}</view></view></view>
+    <view wx:if="{{resultView.recommendations.length}}" class="result-section recommendation-panel"><view class="result-heading">接下来可以做什么</view><view wx:for="{{resultView.recommendations}}" class="list-row"><text class="number">{{index + 1}}</text><text>{{item}}</text></view></view>
+    <view wx:if="{{resultView.follow_up_questions.length}}" class="result-section"><view class="result-heading">进一步确认的小提示</view><view wx:for="{{resultView.follow_up_questions}}" class="list-row"><text class="bullet">·</text><text>{{item}}</text></view></view>
+    <view class="result-notice">{{resultView.notice}}</view>
+  </view>
+  <view class="footer">仔细观察，科学照护<view class="footer-line"></view>每一次发现，都是更好照护的开始</view>
+</view>
