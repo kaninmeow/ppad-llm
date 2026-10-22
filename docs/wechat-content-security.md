@@ -74,7 +74,9 @@ api.example.com {
 | HTTP | code | 行为 |
 | --- | --- | --- |
 | 401 | `LOGIN_FAILED` | 登录失败，不继续上传/分析 |
-| 422 | `INVALID_REQUEST` / 原图片校验错误 | 检查输入，手动重试 |
+| 422 | `INVALID_REQUEST` | 检查输入，手动重试 |
+| 400 | `INVALID_IMAGE` / `UNSUPPORTED_IMAGE` | 检查图片是否有效及格式是否受支持，手动重试 |
+| 413 | `IMAGE_TOO_LARGE` | 选择符合大小限制的图片，手动重试 |
 | 422 | `CONTENT_REJECTED` | 清空照片、描述、结果和预览许可，仅显示 `您提交的内容含违规信息。`，不展示类别、标签、命中词或原文 |
 | 429 | `QUEUE_FULL` | 队列已满，稍后手动重试；客户端也兼容 `TOO_MANY_REQUESTS` |
 | 404 | `NOT_FOUND` | 任务不存在、过期或凭证错误，统一失效提示；客户端也兼容 `JOB_NOT_FOUND` |
