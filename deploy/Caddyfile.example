@@ -1,0 +1,5 @@
+# Replace api.example.com with a DNS name you control.
+# Keep access logs disabled: media URLs contain temporary capabilities.
+api.example.com {
+    reverse_proxy 127.0.0.1:8189
+}

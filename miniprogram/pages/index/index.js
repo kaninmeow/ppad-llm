@@ -11,7 +11,8 @@ const STATUS_LABELS = {
 Page({
   data: {
     photoPath: '', description: '', busy: false, choosing: false,
-    uploadProgress: 0, uploadComplete: false, error: '', resultView: null
+    uploadProgress: 0, uploadComplete: false, stage: 'uploading',
+    photoApproved: false, rejected: false, error: '', resultView: null
   },
 
   onLoad() { this._alive = true; this._request = null; },
@@ -32,7 +33,7 @@ Page({
           this.setData({ error: '图片超过 8 MB，请压缩或重新拍摄后再选择。' });
           return;
         }
-        this.setData({ photoPath: file.tempFilePath, resultView: null, error: '', uploadProgress: 0, uploadComplete: false });
+        this.setData({ photoPath: file.tempFilePath, photoApproved: false, rejected: false, resultView: null, error: '', uploadProgress: 0, uploadComplete: false });
       },
       fail: (error) => {
         if (this._alive === false || /cancel/i.test(String(error && error.errMsg || ''))) return;
@@ -43,25 +44,25 @@ Page({
   },
 
   previewPhoto() {
-    if (this._alive !== false && this.data.photoPath) {
+    if (this._alive !== false && this.data.photoPath && this.data.photoApproved) {
       wx.previewImage({ current: this.data.photoPath, urls: [this.data.photoPath] });
     }
   },
 
   removePhoto() {
     if (this._alive === false || this.data.busy || this.data.choosing) return;
-    this.setData({ photoPath: '', resultView: null, error: '', uploadProgress: 0, uploadComplete: false });
+    this.setData({ photoPath: '', photoApproved: false, rejected: false, resultView: null, error: '', uploadProgress: 0, uploadComplete: false });
   },
 
   onDescriptionInput(event) {
     if (this._alive === false || this.data.busy || this.data.choosing) return;
-    this.setData({ description: String(event.detail.value || '').slice(0, 500), resultView: null, error: '' });
+    this.setData({ description: String(event.detail.value || '').slice(0, 500), resultView: null, photoApproved: false, rejected: false, error: '' });
   },
 
   async recognize() {
     if (this._alive === false || this.data.busy || this.data.choosing) return;
     if (!this.data.photoPath) { this.setData({ error: '请先选择一张番茄照片。' }); return; }
-    this.setData({ busy: true, error: '', resultView: null, uploadProgress: 0, uploadComplete: false });
+    this.setData({ busy: true, photoApproved: false, rejected: false, stage: 'uploading', error: '', resultView: null, uploadProgress: 0, uploadComplete: false });
     const token = {};
     this._request = token;
     const active = () => this._alive !== false && this._request === token;
@@ -69,6 +70,9 @@ Page({
       const request = uploadDiagnosis({
         filePath: this.data.photoPath,
         description: this.data.description,
+        onStage: (stage) => {
+          if (active() && ['checking', 'analysing'].includes(stage)) this.setData({ stage });
+        },
         onProgress: (progress) => {
           if (active()) this.setData({ uploadProgress: progress, uploadComplete: progress === 100 });
         }
@@ -77,6 +81,7 @@ Page({
       const response = await request.promise;
       if (!active()) return;
       this.setData({
+        photoApproved: true,
         resultView: Object.assign({}, response.result, {
           label: STATUS_LABELS[response.result.status], notice: response.notice,
           primaryDisease: response.result.disease_candidates[0] || null,
@@ -85,7 +90,12 @@ Page({
       });
     } catch (error) {
       if (active() && error.code !== 'REQUEST_CANCELLED') {
-        this.setData({ error: error.message || '本次识别未完成，请重试。' });
+        if (error.code === 'CONTENT_REJECTED') {
+          this.setData({ photoPath: '', description: '', resultView: null, photoApproved: false,
+            rejected: true, error: '您提交的内容含违规信息。' });
+        } else {
+          this.setData({ photoApproved: false, error: error.message || '本次识别未完成，请重试。' });
+        }
       }
     } finally {
       if (active()) { this._request = null; this.setData({ busy: false }); }

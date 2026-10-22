@@ -81,3 +81,5 @@
 .result-notice { font-size: 21rpx; line-height: 1.8; color: #949b88; margin-top: 28rpx; padding-top: 22rpx; border-top: 1rpx solid #ebeee2; }
 .footer { display: flex; flex-direction: column; align-items: center; color: #a1a893; font-size: 20rpx; line-height: 1.8; padding: 34rpx 0 0; }
 .footer-line { height: 1rpx; width: 42rpx; background: #d5dcc9; margin: 12rpx 0; }
+
+.photo-pending { min-height: 320rpx; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f4f7f2; border-radius: 20rpx; }

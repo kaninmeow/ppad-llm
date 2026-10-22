@@ -17,8 +17,9 @@
       <view class="file-tip">单张照片 · JPEG / PNG / WebP · 最大 8 MB</view>
     </view>
     <view wx:else class="photo-selected">
-      <image class="photo" src="{{photoPath}}" mode="aspectFit" bindtap="previewPhoto" aria-label="查看所选照片大图"></image>
-      <view class="photo-actions"><text class="preview-hint">点击照片查看大图</text><button class="text-button" bindtap="choosePhoto" disabled="{{busy || choosing}}">更换</button><button class="text-button remove-button" bindtap="removePhoto" disabled="{{busy || choosing}}">移除</button></view>
+      <image wx:if="{{photoApproved}}" class="photo" src="{{photoPath}}" mode="aspectFit" bindtap="previewPhoto" aria-label="查看所选照片大图"></image>
+      <view wx:else class="photo-pending"><view class="photo-title">照片已选择</view><view class="photo-tip">完成内容安全检测后显示照片</view></view>
+      <view class="photo-actions"><text class="preview-hint">{{photoApproved ? '点击照片查看大图' : '待检测照片'}}</text><button class="text-button" bindtap="choosePhoto" disabled="{{busy || choosing}}">更换</button><button class="text-button remove-button" bindtap="removePhoto" disabled="{{busy || choosing}}">移除</button></view>
     </view>
     <view class="divider"></view>
     <view class="section-heading"><text class="step">02</text><text class="section-title">再补充一点线索</text><text class="optional">选填</text></view>
@@ -26,16 +27,17 @@
     <view class="description-footer"><text>症状出现多久？哪些部位有变化？</text><text>{{description.length}}/500</text></view>
   </view>
 
-  <view class="consent"><view class="consent-dot"></view><text>点击识别后，照片和描述将发送至云端模型进行分析。</text></view>
+  <view class="consent"><view class="consent-dot"></view><text>点击识别后，照片和描述将经微信内容安全检测，并发送至云端模型分析；处理期间会短期保存。</text></view>
   <button class="primary-button" bindtap="recognize" disabled="{{busy || choosing || !photoPath}}" loading="{{busy}}">{{busy ? '正在识别，请稍候' : (error ? '重新识别' : '开始初步识别')}}<text wx:if="{{!busy}}" class="button-arrow">↗</text></button>
 
   <view wx:if="{{busy}}" class="progress-panel" role="status">
-    <view class="progress-title">{{uploadComplete ? '照片已上传，正在分析可见症状…' : '正在上传照片 ' + uploadProgress + '%'}}</view>
+    <view class="progress-title">{{stage === 'checking' ? '正在进行内容安全检测…' : (stage === 'analysing' ? '正在分析可见症状…' : (uploadComplete ? '照片已上传，等待内容安全检测…' : '正在登录并上传照片 ' + uploadProgress + '%'))}}</view>
     <view class="progress-track"><view class="progress-fill" style="width: {{uploadProgress}}%;"></view></view>
-    <view class="progress-note">{{uploadComplete ? '分析需要一点时间，请保持页面打开。' : '此进度仅表示照片上传情况。'}}</view>
+    <view class="progress-note">{{stage === 'checking' ? '检测可能需要较长时间，请保持页面打开。' : (stage === 'analysing' ? '分析需要一点时间，请保持页面打开。' : '此进度仅表示照片上传情况。')}}</view>
   </view>
 
-  <view wx:if="{{error}}" class="error-panel" role="alert"><view class="error-title">这次还没完成</view><view class="error-copy">{{error}}</view><view wx:if="{{photoPath}}" class="error-hint">照片和描述已保留，可点击上方按钮重试。</view></view>
+  <view wx:if="{{rejected}}" class="error-panel" role="alert">您提交的内容含违规信息。</view>
+  <view wx:elif="{{error}}" class="error-panel" role="alert"><view class="error-title">这次还没完成</view><view class="error-copy">{{error}}</view><view wx:if="{{photoPath}}" class="error-hint">照片和描述已保留，可点击上方按钮重试。</view></view>
 
   <view wx:if="{{resultView}}" class="card result-card">
     <view class="result-eyebrow">本次观察 · 初步结果</view>
