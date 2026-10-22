@@ -66,7 +66,11 @@ def create_app(
 
     def require_security():
         if not settings.security_configured:
-            raise security_unavailable()
+            raise APIError(
+                503,
+                "SECURITY_NOT_CONFIGURED",
+                "服务尚未配置内容安全检测，请联系管理员。",
+            )
 
     @app.exception_handler(APIError)
     async def api_error_handler(request: Request, exc: APIError):

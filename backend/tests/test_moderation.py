@@ -21,6 +21,8 @@ from test_api import (
 )
 from test_wechat import APPID, envelope, params, settings
 
+from app.errors import APIError
+from app.images import PreparedImage
 from app.main import create_app
 from app.moderation import strings
 
@@ -49,14 +51,28 @@ def scenario(
     media_error=False,
     model_wait=0,
     text_wait=0,
+    hold_stage=None,
+    hold_cancellation=False,
     **overrides,
 ):
     calls = {"model": [], "text": [], "media": [], "all": [], "cancelled": False}
+    calls.update(
+        started=asyncio.Event(), stopped=asyncio.Event(), release=asyncio.Event()
+    )
     config = settings(dashscope_api_key=TEST_KEY, **overrides)
 
     async def handle(request):
         calls["all"].append(request)
         path = request.url.path
+        if path == hold_stage:
+            calls["started"].set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                calls["stopped"].set()
+                if hold_cancellation:
+                    await calls["release"].wait()
+                raise
         if path == "/sns/jscode2session":
             payload = (
                 {"openid": request.url.params["js_code"]}
@@ -256,6 +272,8 @@ def test_output_failure_never_exposes_result(suggest, code, status):
         {"version": True},
         {"version": 2.0},
         {"version": "02"},
+        {"version": "2"},
+        {"errcode": "0"},
         {"errcode": False},
         {"errcode": 0.0},
         {"errcode": -1},
@@ -432,7 +450,7 @@ def test_timeout_and_shutdown_cancel_workers(monkeypatch):
     with scenario(model_wait=30) as (client, calls):
         queued = queue(client)
         callback(client)
-        assert_error(poll(client, queued), 503, "SECURITY_UNAVAILABLE")
+        assert_error(poll(client, queued), 504, "SECURITY_TIMEOUT")
         assert calls["cancelled"]
         assert_inputs_cleared(client)
     monkeypatch.setattr("app.moderation.WORK_TIMEOUT_SECONDS", 180)
@@ -460,15 +478,17 @@ def test_unexpected_worker_failure_is_sanitized():
 
 def test_unconfigured_recognition_callback_and_media_never_call_upstream():
     with scenario(wechat_app_secret="") as (client, calls):
-        assert_error(queue(client), 503, "SECURITY_UNAVAILABLE")
-        assert_error(client.get("/api/diagnose/some-id"), 503, "SECURITY_UNAVAILABLE")
+        assert_error(queue(client), 503, "SECURITY_NOT_CONFIGURED")
+        assert_error(
+            client.get("/api/diagnose/some-id"), 503, "SECURITY_NOT_CONFIGURED"
+        )
         assert_error(
             client.get("/api/moderation-media/some-token.jpg"),
             503,
-            "SECURITY_UNAVAILABLE",
+            "SECURITY_NOT_CONFIGURED",
         )
-        assert_error(callback(client), 503, "SECURITY_UNAVAILABLE")
-        assert_error(client.get("/api/wechat/callback"), 503, "SECURITY_UNAVAILABLE")
+        assert_error(callback(client), 503, "SECURITY_NOT_CONFIGURED")
+        assert_error(client.get("/api/wechat/callback"), 503, "SECURITY_NOT_CONFIGURED")
         assert client.get("/health").json()["security_configured"] is False
         assert not calls["all"]
 
@@ -653,3 +673,154 @@ def test_terminal_error_does_not_retain_tracebacks_or_unchecked_model_output():
             "message": "您提交的内容含违规信息。",
         }
         assert_inputs_cleared(client)
+
+
+@pytest.mark.parametrize("stage", ["/wxa/msg_sec_check", "/wxa/media_check_async"])
+@pytest.mark.parametrize("stop", ["expiry", "shutdown", "deadline"])
+def test_admitted_submission_lifetime(stage, stop):
+    with scenario(hold_stage=stage, moderation_job_ttl_seconds=1) as (client, calls):
+
+        async def exercise():
+            jobs = client.app.state.moderation
+            prepared = PreparedImage(b"private-image", 64, 64)
+            task = asyncio.create_task(jobs.submit(prepared, "private-input", "user"))
+            try:
+                await asyncio.wait_for(calls["started"].wait(), 1)
+                job = next(iter(jobs.jobs.values()))
+                if stop == "expiry":
+                    job.expires = 0
+                    jobs.cleanup()
+                elif stop == "shutdown":
+                    await jobs.close()
+                done, _ = await asyncio.wait({task}, timeout=1.5)
+                assert done, "Admitted upstream submission survived its lifetime"
+                with pytest.raises(APIError) as exc:
+                    await task
+                assert exc.value.code == (
+                    "SECURITY_UNAVAILABLE" if stop == "shutdown" else "SECURITY_TIMEOUT"
+                )
+                assert calls["stopped"].is_set()
+                assert not jobs.jobs and not jobs.media and not jobs.tasks
+                assert job.prepared is None and job.description == job.openid == ""
+                assert task.get_coro().cr_frame is None
+                with pytest.raises(APIError) as missing:
+                    jobs.get(job.job_id, "Bearer " + job.token)
+                assert missing.value.status_code == 404
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+        client.portal.call(exercise)
+        assert not calls["model"]
+
+
+@pytest.mark.parametrize("stage", ["/wxa/msg_sec_check", "/wxa/media_check_async"])
+@pytest.mark.parametrize("capacity", ["pending", "total", "user"])
+def test_cancelling_submissions_keep_capacity_until_unwound(stage, capacity):
+    limits = {
+        "pending": {"moderation_max_pending": 1},
+        "total": {"moderation_max_jobs": 1},
+        "user": {"moderation_max_pending_per_user": 1},
+    }[capacity]
+    with scenario(hold_stage=stage, hold_cancellation=True, **limits) as (
+        client,
+        calls,
+    ):
+
+        async def exercise():
+            jobs = client.app.state.moderation
+            prepared = PreparedImage(b"private-image", 64, 64)
+            task = asyncio.create_task(jobs.submit(prepared, "private-input", "user"))
+            try:
+                await asyncio.wait_for(calls["started"].wait(), 1)
+                job = next(iter(jobs.jobs.values()))
+                job.expires = 0
+                jobs.cleanup()
+                await asyncio.wait_for(calls["stopped"].wait(), 0.5)
+                assert not task.done()
+                next_user = "user" if capacity == "user" else "another-user"
+                with pytest.raises(APIError) as exc:
+                    jobs.reserve(next_user, prepared, "next-input")
+                assert exc.value.code == "QUEUE_FULL"
+                calls["release"].set()
+                await asyncio.gather(task, return_exceptions=True)
+                assert not jobs.tasks
+                assert jobs.reserve(next_user, prepared, "next-input").pending
+            finally:
+                calls["release"].set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+        client.portal.call(exercise)
+
+
+def test_xml_outer_cannot_authorize_json_string_numbers_or_forge_provenance():
+    with scenario() as (client, calls):
+        queued = queue(client)
+        signed = signed_event(version="2", errcode="0", is_xml=True)
+        encrypted = signed["json"]["Encrypt"]
+        response = client.post(
+            "/api/wechat/callback",
+            params=signed["params"],
+            content=f"<xml><Encrypt>{encrypted}</Encrypt></xml>",
+        )
+        assert response.status_code == 200
+        assert_error(poll(client, queued), 503, "SECURITY_UNAVAILABLE")
+        assert not calls["model"]
+
+
+@pytest.mark.parametrize("stop", ["deadline", "shutdown"])
+def test_login_work_is_bounded_and_owned(stop):
+    with scenario(hold_stage="/sns/jscode2session", wechat_request_timeout=0.05) as (
+        client,
+        calls,
+    ):
+
+        async def exercise():
+            jobs = client.app.state.moderation
+            task = asyncio.create_task(
+                jobs.submit(
+                    PreparedImage(b"private-image", 64, 64), "private-input", "user"
+                )
+            )
+            await asyncio.wait_for(calls["started"].wait(), 1)
+            assert not jobs.jobs
+            if stop == "shutdown":
+                await jobs.close()
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            assert done
+            with pytest.raises(APIError) as exc:
+                await task
+            assert exc.value.code == (
+                "SECURITY_TIMEOUT" if stop == "deadline" else "SECURITY_UNAVAILABLE"
+            )
+            assert calls["stopped"].is_set()
+            assert not jobs.logins and not jobs.tasks and not jobs.jobs
+
+        client.portal.call(exercise)
+
+
+def test_cancellation_before_submission_starts_releases_inputs(monkeypatch):
+    with scenario() as (client, calls):
+
+        async def exercise():
+            jobs = client.app.state.moderation
+            reserve = jobs.reserve
+
+            def cancel_after_reservation(*args):
+                job = reserve(*args)
+                asyncio.get_running_loop().call_soon(asyncio.current_task().cancel)
+                return job
+
+            monkeypatch.setattr(jobs, "reserve", cancel_after_reservation)
+            task = asyncio.create_task(
+                jobs.submit(
+                    PreparedImage(b"private-image", 64, 64), "private-input", "user"
+                )
+            )
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not jobs.jobs and not jobs.media and not jobs.tasks
+
+        client.portal.call(exercise)
+        assert not calls["text"] and not calls["media"] and not calls["model"]

@@ -13,6 +13,7 @@ from app.qwen import QwenClient
 from app.schemas import DiagnosisResponse
 from app.settings import Settings
 from app.wechat import WeChatClient, security_unavailable
+from app.wechat_callback import CallbackPayload
 
 POLL = {"poll_after_ms": 1500}
 WORK_TIMEOUT_SECONDS = 180
@@ -24,6 +25,10 @@ def not_found() -> APIError:
 
 def rejected() -> APIError:
     return APIError(422, "CONTENT_REJECTED", "您提交的内容含违规信息。")
+
+
+def security_timeout() -> APIError:
+    return APIError(504, "SECURITY_TIMEOUT", "内容安全检测超时，请稍后重试。")
 
 
 def strings(value):
@@ -38,10 +43,10 @@ def strings(value):
             yield from strings(item)
 
 
-def numeric(value, expected: int) -> bool:
-    # XML leaves are strings; JSON booleans and noncanonical numbers never pass.
+def numeric(value, expected: int, *, is_xml: bool) -> bool:
+    # Only the authenticated inner XML parser can permit string numeric fields.
     return (type(value) is int and value == expected) or (
-        type(value) is str and value == str(expected)
+        is_xml and type(value) is str and value == str(expected)
     )
 
 
@@ -72,6 +77,7 @@ class Job:
     response: DiagnosisResponse | None = None
     error: Failure | None = None
     task: asyncio.Task | None = None
+    submission: asyncio.Task | None = None
 
     @property
     def pending(self) -> bool:
@@ -88,6 +94,8 @@ class ModerationJobs:
         self.traces: dict[str, Job] = {}
         self.early: dict[str, tuple[float, APIError | None]] = {}
         self.tasks: set[asyncio.Task] = set()
+        self.logins: set[asyncio.Task] = set()
+        self.task_owners: dict[asyncio.Task, str] = {}
         self.overflow_until = 0.0
         self.closed = False
 
@@ -95,7 +103,7 @@ class ModerationJobs:
         now = time.monotonic()
         for job in list(self.jobs.values()):
             if job.expires <= now:
-                self._remove(job)
+                self._remove(job, security_timeout())
         for trace, (expires, _) in list(self.early.items()):
             if expires <= now:
                 del self.early[trace]
@@ -114,16 +122,17 @@ class ModerationJobs:
 
     def _fail(self, job: Job, error: APIError):
         # A later signed non-pass revokes even a completed result. Rejection sticks.
-        if job.error is None or job.error.code != "CONTENT_REJECTED":
+        if job.error is None or error.code == "CONTENT_REJECTED":
             job.error = Failure(error.status_code, error.code, error.message)
         job.status = "failed"
         job.response = None
         self._clear_inputs(job)
-        if job.task is not None and job.task is not asyncio.current_task():
-            job.task.cancel()
+        for task in (job.task, job.submission):
+            if task is not None and task is not asyncio.current_task():
+                self._cancel(task)
 
-    def _remove(self, job: Job):
-        self._fail(job, security_unavailable())
+    def _remove(self, job: Job, error: APIError | None = None):
+        self._fail(job, error or security_unavailable())
         self.jobs.pop(job.job_id, None)
         if job.trace is not None and self.traces.get(job.trace) is job:
             del self.traces[job.trace]
@@ -134,13 +143,19 @@ class ModerationJobs:
         if self.closed or now < self.overflow_until:
             raise security_unavailable()
         pending = [job for job in self.jobs.values() if job.pending]
-        # Cancelled workers remain counted until their done callbacks release them.
-        active = {job.task for job in pending if job.task is not None}
+        # Cancelling submissions/workers still consume capacity until they unwind.
+        active = {
+            task
+            for job in pending
+            for task in (job.task, job.submission)
+            if task is not None
+        }
+        draining = self.tasks - active
         if (
-            len(self.jobs) >= self.settings.moderation_max_jobs
-            or len(pending) + len(self.tasks - active)
-            >= self.settings.moderation_max_pending
+            len(self.jobs) + len(draining) >= self.settings.moderation_max_jobs
+            or len(pending) + len(draining) >= self.settings.moderation_max_pending
             or sum(job.openid == openid for job in pending)
+            + sum(self.task_owners[task] == openid for task in draining)
             >= self.settings.moderation_max_pending_per_user
         ):
             raise APIError(429, "QUEUE_FULL", "当前识别请求较多，请稍后重试。")
@@ -159,18 +174,65 @@ class ModerationJobs:
         return job
 
     async def submit(self, prepared: PreparedImage, description: str, code: str):
-        openid = await self.wechat.exchange_code(code)
+        deadline = (
+            asyncio.get_running_loop().time() + self.settings.moderation_job_ttl_seconds
+        )
+        openid = await self._login(code)
         job = self.reserve(openid, prepared, description)
+        job.submission = asyncio.create_task(self._submit(job, deadline))
+        self._track(job.submission, openid)
+        # Inputs now belong to the admitted job and its cancellable upstream work.
+        del prepared, description, code, openid
         try:
-            await self.wechat.check_text(openid, description)
-            self._assert_submitting(job)
-            trace = await self.wechat.submit_image(
-                openid,
-                self.settings.public_base_url
-                + "/api/moderation-media/"
-                + job.media_token
-                + ".jpg",
+            return await job.submission
+        except asyncio.CancelledError:
+            # Cancellation can reach the child before its coroutine ever starts.
+            self._remove(job)
+            if not asyncio.current_task().cancelling() and job.error is not None:
+                raise job.error.exception() from None
+            raise
+
+    async def _login(self, code: str) -> str:
+        if self.closed:
+            raise security_unavailable()
+        if len(self.logins) >= self.settings.moderation_max_pending:
+            raise APIError(429, "QUEUE_FULL", "当前识别请求较多，请稍后重试。")
+        task = asyncio.create_task(self.wechat.exchange_code(code))
+        self.logins.add(task)
+        task.add_done_callback(self.logins.discard)
+        try:
+            async with asyncio.timeout(
+                min(
+                    self.settings.wechat_request_timeout,
+                    self.settings.moderation_job_ttl_seconds,
+                )
+            ):
+                return await task
+        except TimeoutError:
+            raise security_timeout() from None
+        except asyncio.CancelledError:
+            if self.closed and not asyncio.current_task().cancelling():
+                raise security_unavailable() from None
+            raise
+
+    async def _submit(self, job: Job, deadline: float):
+        try:
+            # An absolute total deadline also bounds continuously trickling HTTP.
+            deadline = min(
+                deadline,
+                asyncio.get_running_loop().time()
+                + max(0, job.expires - time.monotonic()),
             )
+            async with asyncio.timeout_at(deadline):
+                await self.wechat.check_text(job.openid, job.description)
+                self._assert_submitting(job)
+                trace = await self.wechat.submit_image(
+                    job.openid,
+                    self.settings.public_base_url
+                    + "/api/moderation-media/"
+                    + job.media_token
+                    + ".jpg",
+                )
             self._assert_submitting(job)
             if trace in self.traces:
                 self._fail(self.traces[trace], security_unavailable())
@@ -186,6 +248,9 @@ class ModerationJobs:
                 "status": "checking",
                 **POLL,
             }
+        except TimeoutError:
+            self._remove(job, security_timeout())
+            raise security_timeout() from None
         except (APIError, asyncio.CancelledError):
             # Also release reservations on disconnect/cancellation.
             self._remove(job)
@@ -193,6 +258,8 @@ class ModerationJobs:
         except Exception:
             self._remove(job)
             raise security_unavailable() from None
+        finally:
+            job.submission = None
 
     def _assert_submitting(self, job: Job):
         self.cleanup()
@@ -228,12 +295,13 @@ class ModerationJobs:
         if not isinstance(trace, str) or not 0 < len(trace) <= 128 or not trace.strip():
             raise security_unavailable()
         result = event.get("result")
+        is_xml = isinstance(event, CallbackPayload) and event.is_xml
         error = security_unavailable()
         if (
             event.get("MsgType") == "event"
             and event.get("appid") == self.settings.wechat_app_id
-            and numeric(event.get("version"), 2)
-            and numeric(event.get("errcode"), 0)
+            and numeric(event.get("version"), 2, is_xml=is_xml)
+            and numeric(event.get("errcode"), 0, is_xml=is_xml)
             and isinstance(result, dict)
         ):
             if result.get("suggest") == "pass":
@@ -270,8 +338,22 @@ class ModerationJobs:
         elif job.status == "checking":
             job.status = "analysing"
             job.task = asyncio.create_task(self._work(job))
-            self.tasks.add(job.task)
-            job.task.add_done_callback(self.tasks.discard)
+            self._track(job.task, job.openid)
+
+    def _track(self, task: asyncio.Task, openid: str):
+        self.tasks.add(task)
+        self.task_owners[task] = openid
+        task.add_done_callback(self._task_done)
+
+    def _task_done(self, task: asyncio.Task):
+        self.tasks.discard(task)
+        self.task_owners.pop(task, None)
+
+    @staticmethod
+    def _cancel(task: asyncio.Task):
+        # Do not interrupt an upstream coroutine already unwinding cancellation.
+        if not task.cancelling():
+            task.cancel()
 
     async def _work(self, job: Job):
         try:
@@ -298,6 +380,8 @@ class ModerationJobs:
             raise
         except APIError as exc:
             self._fail(job, exc)
+        except TimeoutError:
+            self._fail(job, security_timeout())
         except Exception:
             self._fail(job, security_unavailable())
         finally:
@@ -308,9 +392,11 @@ class ModerationJobs:
         self.closed = True
         for job in list(self.jobs.values()):
             self._remove(job)
-        tasks = tuple(self.tasks)
+        tasks = tuple(self.tasks | self.logins)
         for task in tasks:
-            task.cancel()
+            self._cancel(task)
         await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        self.logins.clear()
+        self.task_owners.clear()
         self.early.clear()

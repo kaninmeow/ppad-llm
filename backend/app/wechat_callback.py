@@ -18,6 +18,14 @@ _MAX_BODY = 64 * 1024
 _UNSAFE_XML = re.compile(r"<\s*(?:\?|!(?!\[CDATA\[|--))", re.IGNORECASE)
 
 
+class CallbackPayload(dict):
+    """Dictionary with parser-owned format provenance, separate from event fields."""
+
+    def __init__(self, values: dict, *, is_xml: bool):
+        super().__init__(values)
+        self.is_xml = is_xml
+
+
 def _xml_value(element: ET.Element, depth: int = 0):
     if depth > 32 or element.attrib:
         raise ValueError("Invalid XML structure")
@@ -44,7 +52,7 @@ def _parse(raw: bytes) -> dict:
         raise ValueError("Invalid body length")
     text = raw.decode("utf-8").strip()
     if text.startswith("{"):
-        return strict_json(raw)
+        return CallbackPayload(strict_json(raw), is_xml=False)
     if not text.startswith("<") or _UNSAFE_XML.search(text):
         raise ValueError("Invalid XML")
     root = ET.fromstring(text)
@@ -53,7 +61,7 @@ def _parse(raw: bytes) -> dict:
     result = _xml_value(root)
     if not isinstance(result, dict):
         raise ValueError("Expected object")
-    return result
+    return CallbackPayload(result, is_xml=True)
 
 
 class WeChatCallback:

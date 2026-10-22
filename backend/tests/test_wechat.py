@@ -393,7 +393,9 @@ def test_encrypted_callback_json_and_xml(outer_format, inner_format):
             f"<AppId>{APPID}</AppId></xml>"
         ).encode()
     )
-    assert WeChatCallback(settings()).decode_event(params(encrypted), body) == event
+    decoded = WeChatCallback(settings()).decode_event(params(encrypted), body)
+    assert decoded == event
+    assert decoded.is_xml is (inner_format == "xml")
 
 
 def test_official_callback_ciphertext(monkeypatch):
