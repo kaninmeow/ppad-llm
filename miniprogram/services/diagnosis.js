@@ -33,7 +33,9 @@ function failure(code, message) {
 }
 
 function isText(value, max = Infinity) {
-  return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= max;
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && Array.from(trimmed).length <= max;
 }
 function exactFields(value, fields) {
   return value && typeof value === 'object' && !Array.isArray(value) &&

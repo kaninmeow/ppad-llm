@@ -626,6 +626,22 @@ test('v2 crop verification and status table is enforced exhaustively with strict
   }
 });
 
+test('production transport validates crop reason limits by Unicode code points', async () => {
+  for (const [reason, accepted] of [
+    ['🍅'.repeat(151), true],
+    ['🍅'.repeat(300), true],
+    ['🍅'.repeat(301), false]
+  ]) {
+    const { service, state } = transport();
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
+    const body = response();
+    body.result.crop.reason = reason;
+    state.respond({ statusCode: 200, data: body });
+    if (accepted) assert.equal((await request.promise).result.crop.reason, reason);
+    else await assert.rejects(request.promise, error => error.code === 'INVALID_MODEL_RESPONSE');
+  }
+});
+
 test('crop changes clear stale output, approval and progress while retaining photo and description; selection locks', async () => {
   const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
   const select = id => page.onCropSelect({ currentTarget: { dataset: { cropId: id } } });
