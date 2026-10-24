@@ -1,6 +1,8 @@
 const { API_BASE_URL, UPLOAD_TIMEOUT_MS } = require('../config');
 
-const STATUSES = ['suspected_disease', 'healthy', 'uncertain', 'not_tomato'];
+const CROPS = require('../data/crops');
+const cropIds = CROPS.map((crop) => crop.id);
+const STATUSES = ['suspected_disease', 'healthy', 'uncertain', 'crop_mismatch', 'unsupported_crop'];
 const MESSAGES = {
   SECURITY_NOT_CONFIGURED: '服务尚未配置内容安全检测，请联系管理员。',
   SECURITY_UNAVAILABLE: '内容安全检测暂时不可用，请稍后重试。',
@@ -15,7 +17,7 @@ const MESSAGES = {
   INVALID_IMAGE: '无法读取这张图片，请重新选择清晰的照片。',
   IMAGE_TOO_LARGE: '图片超过 8 MB，请压缩或重新拍摄后重试。',
   UNSUPPORTED_IMAGE: '请使用 JPEG、PNG 或 WebP 格式的照片。',
-  INVALID_REQUEST: '提交内容有误，请检查图片和描述后重试。',
+  INVALID_REQUEST: '提交内容有误，请检查作物、图片和描述后重试。',
   MODEL_AUTH_FAILED: '识别服务暂时无法使用，请联系服务管理员。',
   MODEL_RATE_LIMITED: '当前识别请求较多，请稍后重试。',
   MODEL_TIMEOUT: '识别等待超时，请稍后重试。',
@@ -30,8 +32,14 @@ function failure(code, message) {
   return error;
 }
 
-function isText(value) { return typeof value === 'string' && value.trim().length > 0; }
-function textList(value) { return Array.isArray(value) && value.every(isText); }
+function isText(value, max = Infinity) {
+  return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= max;
+}
+function exactFields(value, fields) {
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === fields.length && fields.every((field) => Object.prototype.hasOwnProperty.call(value, field));
+}
+function textList(value) { return Array.isArray(value) && value.length <= 6 && value.every((text) => isText(text, 300)); }
 
 function validCandidates(result) {
   const candidates = result.disease_candidates;
@@ -40,7 +48,7 @@ function validCandidates(result) {
   if (!candidates.length || !candidates[0] || candidates[0].name !== result.disease_name) return false;
   const names = new Set();
   return candidates.every((candidate, index) => {
-    if (!candidate || !isText(candidate.name) || !isText(candidate.reason) ||
+    if (!exactFields(candidate, ['name', 'likelihood', 'reason']) || !isText(candidate.name, 100) || !isText(candidate.reason, 300) ||
         !Number.isInteger(candidate.likelihood) || candidate.likelihood < 0 || candidate.likelihood > 100) return false;
     const name = candidate.name.trim();
     if (names.has(name) || (index > 0 && candidate.likelihood > candidates[index - 1].likelihood)) return false;
@@ -49,17 +57,34 @@ function validCandidates(result) {
   });
 }
 
-function validResponse(body) {
-  if (!body || typeof body !== 'object' || !isText(body.request_id) ||
-      !isText(body.model) || !Number.isFinite(body.elapsed_ms) || body.elapsed_ms < 0 ||
-      !isText(body.notice)) return false;
+function validCrop(result, submittedCropId) {
+  const crop = result.crop;
+  if (!exactFields(crop, ['selected', 'detected', 'verification', 'reason']) ||
+      !cropIds.includes(crop.selected) || crop.selected !== submittedCropId || !isText(crop.reason, 300)) return false;
+  const normal = ['suspected_disease', 'healthy', 'uncertain'].includes(result.status);
+  switch (crop.verification) {
+    case 'matched': return crop.detected === crop.selected && normal;
+    case 'unverified': return crop.detected === null && normal;
+    case 'mismatch': return cropIds.includes(crop.detected) && crop.detected !== crop.selected &&
+      result.status === 'crop_mismatch' && Array.isArray(result.possible_causes) && result.possible_causes.length === 0;
+    case 'unsupported': return crop.detected === 'other' && result.status === 'unsupported_crop' &&
+      Array.isArray(result.possible_causes) && result.possible_causes.length === 0;
+    default: return false;
+  }
+}
+
+function validResponse(body, submittedCropId) {
+  if (!exactFields(body, ['request_id', 'model', 'elapsed_ms', 'result', 'notice']) || !isText(body.request_id) ||
+      !isText(body.model) || !Number.isInteger(body.elapsed_ms) || body.elapsed_ms < 0 || !isText(body.notice)) return false;
   const result = body.result;
-  if (!result || !STATUSES.includes(result.status) || !isText(result.summary)) return false;
-  if (result.status === 'suspected_disease' ? !isText(result.disease_name) : result.disease_name !== null) return false;
+  if (!exactFields(result, ['status', 'crop', 'disease_name', 'disease_candidates', 'summary',
+    'observed_symptoms', 'possible_causes', 'recommendations', 'follow_up_questions']) ||
+      !STATUSES.includes(result.status) || !isText(result.summary, 800) || !validCrop(result, submittedCropId)) return false;
+  if (result.status === 'suspected_disease' ? !isText(result.disease_name, 100) : result.disease_name !== null) return false;
   if (!validCandidates(result)) return false;
   return textList(result.observed_symptoms) && textList(result.recommendations) &&
-    textList(result.follow_up_questions) && Array.isArray(result.possible_causes) &&
-    result.possible_causes.every((cause) => cause && isText(cause.name) && isText(cause.reason));
+    textList(result.follow_up_questions) && Array.isArray(result.possible_causes) && result.possible_causes.length <= 3 &&
+    result.possible_causes.every((cause) => exactFields(cause, ['name', 'reason']) && isText(cause.name, 300) && isText(cause.reason, 300));
 }
 
 const TOTAL_TIMEOUT_MS = 32 * 60 * 1000;
@@ -89,7 +114,7 @@ function validPending(body, admission) {
   return !admission || (opaque(body.job_id) && opaque(body.job_token));
 }
 
-function uploadDiagnosis({ filePath, description = '', onProgress, onStage } = {}) {
+function uploadDiagnosis({ filePath, cropId, description = '', onProgress, onStage } = {}) {
   let settled = false, current = null, delayTimer = null, deadlineTimer = null;
   let finish, jobId, jobToken;
   const deadline = Date.now() + TOTAL_TIMEOUT_MS;
@@ -157,12 +182,12 @@ function uploadDiagnosis({ filePath, description = '', onProgress, onStage } = {
         delayTimer = null;
         if (!active()) return;
         start((options) => wx.request(options), {
-          url: API_BASE_URL.replace(/\/+$/, '') + '/api/diagnose/' + encodeURIComponent(jobId),
+          url: API_BASE_URL.replace(/\/+$/, '') + '/api/v2/diagnose/' + encodeURIComponent(jobId),
           method: 'GET', header: { Authorization: 'Bearer ' + jobToken }
         }, (response) => {
           const body = parseBody(response);
           if (response.statusCode === 200) {
-            if (!validResponse(body)) throw failure('INVALID_RESPONSE', INVALID_RESPONSE_MESSAGE);
+            if (!validResponse(body, cropId)) throw failure('INVALID_MODEL_RESPONSE', MESSAGES.INVALID_MODEL_RESPONSE);
             finish(null, body);
           } else {
             if (!validPending(body, false)) throw failure('INVALID_RESPONSE', INVALID_RESPONSE_MESSAGE);
@@ -171,13 +196,13 @@ function uploadDiagnosis({ filePath, description = '', onProgress, onStage } = {
         });
       }, Math.max(1000, Math.min(5000, body.poll_after_ms)));
     };
-    if (!isText(filePath)) { finish(failure('INVALID_REQUEST', '请先选择一张番茄照片。')); return; }
+    if (!cropIds.includes(cropId) || !isText(filePath)) { finish(failure('INVALID_REQUEST', MESSAGES.INVALID_REQUEST)); return; }
     deadlineTimer = setTimeout(timeout, TOTAL_TIMEOUT_MS);
     start((options) => wx.login(options), {}, (login) => {
       if (!login || !isText(login.code) || login.code.length > 512) throw failure('LOGIN_FAILED', MESSAGES.LOGIN_FAILED);
       start((options) => wx.uploadFile(options), {
-        url: API_BASE_URL.replace(/\/+$/, '') + '/api/diagnose', filePath, name: 'image',
-        formData: { description, login_code: login.code }
+        url: API_BASE_URL.replace(/\/+$/, '') + '/api/v2/diagnose', filePath, name: 'image',
+        formData: { crop_id: cropId, description, login_code: login.code }
       }, (response) => {
         const body = parseBody(response);
         if (response.statusCode !== 202 || !validPending(body, true)) throw failure('INVALID_RESPONSE', INVALID_RESPONSE_MESSAGE);

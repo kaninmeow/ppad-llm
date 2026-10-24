@@ -1,21 +1,34 @@
 const { uploadDiagnosis } = require('../../services/diagnosis');
+const CROPS = require('../../data/crops');
+const cropById = (id) => CROPS.find((crop) => crop.id === id);
 const { MAX_IMAGE_BYTES } = require('../../config');
 
 const STATUS_LABELS = {
   suspected_disease: '疑似病害',
   healthy: '未见明显病害',
   uncertain: '暂时无法判断',
-  not_tomato: '未识别到番茄'
+  crop_mismatch: '作物与选择不一致',
+  unsupported_crop: '暂不支持该作物'
 };
 
 Page({
   data: {
+    selectedCropId: '', selectedCropName: '', cropOptions: CROPS,
     photoPath: '', description: '', busy: false, choosing: false,
     uploadProgress: 0, uploadComplete: false, stage: 'uploading',
     photoApproved: false, rejected: false, error: '', resultView: null
   },
 
   onLoad() { this._alive = true; this._request = null; },
+
+  onCropSelect(event) {
+    if (this._alive === false || this.data.busy || this.data.choosing) return;
+    const crop = cropById(event && event.currentTarget && event.currentTarget.dataset && event.currentTarget.dataset.cropId);
+    if (!crop || crop.id === this.data.selectedCropId) return;
+    this.setData({ selectedCropId: crop.id, selectedCropName: crop.name,
+      resultView: null, photoApproved: false, rejected: false, error: '',
+      uploadProgress: 0, uploadComplete: false, stage: 'uploading' });
+  },
 
   choosePhoto() {
     if (this._alive === false || this.data.busy || this.data.choosing) return;
@@ -61,14 +74,16 @@ Page({
 
   async recognize() {
     if (this._alive === false || this.data.busy || this.data.choosing) return;
-    if (!this.data.photoPath) { this.setData({ error: '请先选择一张番茄照片。' }); return; }
+    const selectedCrop = cropById(this.data.selectedCropId);
+    if (!selectedCrop) { this.setData({ error: '请先选择本次观察的作物。' }); return; }
+    if (!this.data.photoPath) { this.setData({ error: '请先选择一张作物照片。' }); return; }
     this.setData({ busy: true, photoApproved: false, rejected: false, stage: 'uploading', error: '', resultView: null, uploadProgress: 0, uploadComplete: false });
     const token = {};
     this._request = token;
     const active = () => this._alive !== false && this._request === token;
     try {
       const request = uploadDiagnosis({
-        filePath: this.data.photoPath,
+        filePath: this.data.photoPath, cropId: selectedCrop.id,
         description: this.data.description,
         onStage: (stage) => {
           if (active() && ['checking', 'analysing'].includes(stage)) this.setData({ stage });
@@ -84,6 +99,11 @@ Page({
         photoApproved: true,
         resultView: Object.assign({}, response.result, {
           label: STATUS_LABELS[response.result.status], notice: response.notice,
+          selectedCropName: selectedCrop.name,
+          detectedCropName: (cropById(response.result.crop.detected) || {}).name || '',
+          conditionalLabel: response.result.crop.verification === 'unverified' ? '按你选择的' + selectedCrop.name + '分析' : '',
+          reselectGuidance: response.result.status === 'crop_mismatch' ? '请重新选择与照片一致的作物后识别。' :
+            response.result.status === 'unsupported_crop' ? '目前仅支持列出的六种作物，请重新选择支持的作物及对应照片。' : '',
           primaryDisease: response.result.disease_candidates[0] || null,
           alternativeDiseases: response.result.disease_candidates.slice(1)
         })
@@ -92,7 +112,7 @@ Page({
       if (active() && error.code !== 'REQUEST_CANCELLED') {
         if (error.code === 'CONTENT_REJECTED') {
           this.setData({ photoPath: '', description: '', resultView: null, photoApproved: false,
-            rejected: true, error: '您提交的内容含违规信息。' });
+            rejected: true, error: '您提交的内容含违规信息。', uploadProgress: 0, uploadComplete: false, stage: 'uploading' });
         } else {
           this.setData({ photoApproved: false, error: error.message || '本次识别未完成，请重试。' });
         }

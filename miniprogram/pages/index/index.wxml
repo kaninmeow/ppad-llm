@@ -1,14 +1,20 @@
 <view class="page">
   <view class="hero">
-    <view class="eyebrow"><view class="tiny-leaf"></view> 番茄观察室 · PHOTO CHECK</view>
-    <view class="hero-title">看看番茄怎么了</view>
+    <view class="eyebrow"><view class="tiny-leaf"></view> 蔬菜观察室 · PHOTO CHECK</view>
+    <view class="hero-title">看看蔬菜怎么了</view>
     <view class="hero-copy">从一张照片开始，了解可见症状与照护方向。</view>
     <view class="hero-note">AI 辅助初步识别 · 仅供种植参考</view>
-    <view class="tomato-art" aria-hidden="true"><view class="tomato-leaf leaf-one"></view><view class="tomato-leaf leaf-two"></view><view class="tomato-shine"></view></view>
+    <view class="leaf-art" aria-hidden="true"><view class="hero-leaf leaf-one"></view><view class="hero-leaf leaf-two"></view></view>
   </view>
 
   <view class="card input-card">
-    <view class="section-heading"><text class="step">01</text><text class="section-title">给它拍张照片</text><text class="required">必选</text></view>
+    <view class="section-heading"><text class="step">01</text><text class="section-title">选择本次观察的作物</text><text class="required">必选</text></view>
+    <view class="crop-options">
+      <button wx:for="{{cropOptions}}" wx:key="id" class="crop-button {{selectedCropId === item.id ? 'crop-selected' : ''}}" data-crop-id="{{item.id}}" bindtap="onCropSelect" disabled="{{busy || choosing}}" aria-label="{{item.name}}" aria-pressed="{{selectedCropId === item.id}}">{{item.name}}</button>
+    </view>
+    <view class="crop-tip">请选择照片中的作物；大白菜不包括小白菜和甘蓝。选择仅作为分析线索，仍需依据照片核实。</view>
+    <view class="divider"></view>
+    <view class="section-heading"><text class="step">02</text><text class="section-title">给它拍张照片</text><text class="required">必选</text></view>
     <view wx:if="{{!photoPath}}" class="photo-empty">
       <view class="photo-frame"><view class="frame-leaf"></view><view class="frame-line"></view></view>
       <view class="photo-title">把不对劲的地方拍清楚</view>
@@ -22,13 +28,13 @@
       <view class="photo-actions"><text class="preview-hint">{{photoApproved ? '点击照片查看大图' : '待检测照片'}}</text><button class="text-button" bindtap="choosePhoto" disabled="{{busy || choosing}}">更换</button><button class="text-button remove-button" bindtap="removePhoto" disabled="{{busy || choosing}}">移除</button></view>
     </view>
     <view class="divider"></view>
-    <view class="section-heading"><text class="step">02</text><text class="section-title">再补充一点线索</text><text class="optional">选填</text></view>
+    <view class="section-heading"><text class="step">03</text><text class="section-title">再补充一点线索</text><text class="optional">选填</text></view>
     <textarea class="description" value="{{description}}" bindinput="onDescriptionInput" maxlength="500" disabled="{{busy || choosing}}" placeholder="例如：下部叶片先出现黄斑，近两天浇水较多，已持续 3 天……" placeholder-class="placeholder" auto-height="{{false}}" show-confirm-bar="{{false}}" adjust-position="{{true}}" />
     <view class="description-footer"><text>症状出现多久？哪些部位有变化？</text><text>{{description.length}}/500</text></view>
   </view>
 
   <view class="consent"><view class="consent-dot"></view><text>点击识别后，照片和描述将经微信内容安全检测，并发送至云端模型分析；处理期间会短期保存。</text></view>
-  <button class="primary-button" bindtap="recognize" disabled="{{busy || choosing || !photoPath}}" loading="{{busy}}">{{busy ? '正在识别，请稍候' : (error ? '重新识别' : '开始初步识别')}}<text wx:if="{{!busy}}" class="button-arrow">↗</text></button>
+  <button class="primary-button" bindtap="recognize" disabled="{{busy || choosing || !selectedCropId || !photoPath}}" loading="{{busy}}">{{busy ? '正在识别，请稍候' : (error ? '重新识别' : '开始初步识别')}}<text wx:if="{{!busy}}" class="button-arrow">↗</text></button>
 
   <view wx:if="{{busy}}" class="progress-panel" role="status">
     <view class="progress-title">{{stage === 'checking' ? '正在进行内容安全检测…' : (stage === 'analysing' ? '正在分析可见症状…' : (uploadComplete ? '照片已上传，等待内容安全检测…' : '正在登录并上传照片 ' + uploadProgress + '%'))}}</view>
@@ -42,6 +48,13 @@
   <view wx:if="{{resultView}}" class="card result-card">
     <view class="result-eyebrow">本次观察 · 初步结果</view>
     <view class="status-badge status-{{resultView.status}}">{{resultView.label}}</view>
+    <view class="crop-assessment">
+      <view class="crop-result-name">选择的作物：{{resultView.selectedCropName}}</view>
+      <view wx:if="{{resultView.conditionalLabel}}" class="conditional-panel"><view class="conditional-title">{{resultView.conditionalLabel}}</view><view>图片无法独立确认作物</view></view>
+      <view wx:if="{{resultView.detectedCropName}}" class="crop-detected">照片判断的作物：{{resultView.detectedCropName}}</view>
+      <view class="crop-reason">{{resultView.crop.reason}}</view>
+      <view wx:if="{{resultView.reselectGuidance}}" class="reselect-guidance">{{resultView.reselectGuidance}}</view>
+    </view>
     <view wx:if="{{resultView.disease_name}}" class="disease-name">{{resultView.disease_name}}</view>
     <view class="summary">{{resultView.summary}}</view>
     <view wx:if="{{resultView.primaryDisease}}" class="result-section likelihood-section">

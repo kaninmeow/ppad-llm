@@ -8,21 +8,22 @@ const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const config = require('../miniprogram/config');
 function loadService(wx, timers = { setTimeout, clearTimeout, Date }) {
-  const context = { module: { exports: {} }, require: () => config, wx, ...timers };
+  const context = { module: { exports: {} }, require: (name) => name.endsWith('config') ? config : require('../miniprogram/data/crops'), wx, ...timers };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'miniprogram/services/diagnosis.js'), 'utf8'), context);
   return context.module.exports;
 }
-function response(status = 'suspected_disease') {
+function response(status = 'suspected_disease', cropId = 'tomato', verification = status === 'crop_mismatch' ? 'mismatch' : status === 'unsupported_crop' ? 'unsupported' : 'matched') {
   return {
     request_id: 'request-123', model: 'qwen3.8-flash', elapsed_ms: 1200,
     result: {
+      crop: { selected: cropId, detected: verification === 'unverified' ? null : verification === 'unsupported' ? 'other' : verification === 'mismatch' ? (cropId === 'tomato' ? 'cucumber' : 'tomato') : cropId, verification, reason: '作物判断说明' },
       status, disease_name: status === 'suspected_disease' ? '疑似早疫病' : null,
       disease_candidates: status === 'suspected_disease' ? [
         { name: '疑似早疫病', likelihood: 70, reason: '可见环纹样褐斑' },
         { name: '斑枯病', likelihood: 25, reason: '局部斑点可能相似' }
       ] : [],
       summary: '叶片上可见褐色斑点，需要结合现场确认。', observed_symptoms: ['叶片出现褐斑'],
-      possible_causes: [{ name: '真菌侵染', reason: '斑点呈环纹状' }],
+      possible_causes: ['crop_mismatch', 'unsupported_crop'].includes(status) ? [] : [{ name: '真菌侵染', reason: '斑点呈环纹状' }],
       recommendations: ['检查其他叶片'], follow_up_questions: []
     },
     notice: '本结果仅基于图片进行初步识别，不能替代现场诊断。'
@@ -80,7 +81,7 @@ function pageHarness(uploadDiagnosis) {
   };
   const context = {
     Page(value) { definition = value; }, wx,
-    require(name) { return name.endsWith('config') ? config : { uploadDiagnosis }; }
+    require(name) { return name.endsWith('config') ? config : name.endsWith('crops') ? require('../miniprogram/data/crops') : { uploadDiagnosis }; }
   };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'miniprogram/pages/index/index.js'), 'utf8'), context);
   const page = Object.assign({}, definition, {
@@ -107,8 +108,8 @@ function choose(wx, file = { tempFilePath: '/new.jpg', size: 1024 }) {
 
 test('upload serializes the actual image, description, URL and timeout', async () => {
   const { state, service } = transport();
-  const request = service.uploadDiagnosis({ filePath: '/tomato.jpg', description: '第三天有斑点' });
-  assert.equal(state.options.url, config.API_BASE_URL.replace(/\/+$/, '') + '/api/diagnose');
+  const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/tomato.jpg', description: '第三天有斑点' });
+  assert.equal(state.options.url, config.API_BASE_URL.replace(/\/+$/, '') + '/api/v2/diagnose');
   assert.equal(state.options.formData.login_code, 'login-code');
   assert.equal(state.options.name, 'image');
   assert.equal(state.options.filePath, '/tomato.jpg');
@@ -120,10 +121,10 @@ test('upload serializes the actual image, description, URL and timeout', async (
   assert.equal(result.request_id, 'request-123');
 });
 
-for (const status of ['healthy', 'uncertain', 'not_tomato']) {
+for (const status of ['healthy', 'uncertain', 'crop_mismatch', 'unsupported_crop']) {
   test(`accepts the ${status} result with null disease and empty sections`, async () => {
     const { state, service } = transport();
-    const request = service.uploadDiagnosis({ filePath: '/tomato.jpg' });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/tomato.jpg' });
     const body = response(status);
     body.result.observed_symptoms = [];
     body.result.possible_causes = [];
@@ -135,7 +136,7 @@ for (const status of ['healthy', 'uncertain', 'not_tomato']) {
 
 test('server error uses stable safe fixed Chinese message', async () => {
   const { state, service } = transport();
-  const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+  const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
   state.respond({ statusCode: 429, data: JSON.stringify({ error: { code: 'MODEL_RATE_LIMITED', message: '<b>请求较多</b>\n请稍后重试' } }) });
   await assert.rejects(request.promise, (error) => error.code === 'MODEL_RATE_LIMITED' && error.message === '当前识别请求较多，请稍后重试。');
 });
@@ -143,7 +144,7 @@ test('server error uses stable safe fixed Chinese message', async () => {
 test('unknown or malformed HTTP errors use a stable readable fallback', async () => {
   for (const body of [{ error: { code: 'NEW_ERROR', message: '' } }, {}, null]) {
     const { state, service } = transport();
-    const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     state.respond({ statusCode: 503, data: JSON.stringify(body) });
     await assert.rejects(request.promise, (error) => ['NEW_ERROR', 'REQUEST_FAILED'].includes(error.code) && error.message.includes('请稍后重试'));
   }
@@ -152,7 +153,7 @@ test('unknown or malformed HTTP errors use a stable readable fallback', async ()
 test('non-JSON proxy HTML is rejected safely on success and failure responses', async () => {
   for (const statusCode of [200, 502]) {
     const { state, service } = transport();
-    const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     state.respond({ statusCode, data: '<html>gateway error</html>' });
     await assert.rejects(request.promise, (error) => error.code === 'INVALID_RESPONSE' && !error.message.includes('html'));
   }
@@ -172,10 +173,10 @@ test('invalid result status, missing fields and inconsistent disease are rejecte
   ];
   for (const mutate of mutations) {
     const { state, service } = transport();
-    const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     const body = response(); mutate(body);
     state.respond({ statusCode: 200, data: JSON.stringify(body) });
-    await assert.rejects(request.promise, (error) => error.code === 'INVALID_RESPONSE');
+    await assert.rejects(request.promise, (error) => error.code === 'INVALID_MODEL_RESPONSE');
   }
 });
 
@@ -191,21 +192,21 @@ test('rejects invalid likelihood ranges, types and candidate structure before re
     (body) => { body.result.disease_candidates[0].reason = ' '; },
     (body) => { body.result.disease_candidates = Array(4).fill(body.result.disease_candidates[0]); },
     ...[-1, 101, 70.5, '70', true, null].map((value) => (body) => { body.result.disease_candidates[0].likelihood = value; }),
-    ...['healthy', 'uncertain', 'not_tomato'].map((status) => (body) => { body.result.status = status; body.result.disease_name = null; })
+    ...['healthy', 'uncertain', 'crop_mismatch', 'unsupported_crop'].map((status) => (body) => { body.result.status = status; body.result.disease_name = null; })
   ];
   for (const mutate of mutations) {
     const { state, service } = transport();
-    const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     const body = response(); mutate(body);
     state.respond({ statusCode: 200, data: JSON.stringify(body) });
-    await assert.rejects(request.promise, (error) => error.code === 'INVALID_RESPONSE');
+    await assert.rejects(request.promise, (error) => error.code === 'INVALID_MODEL_RESPONSE');
   }
 });
 
 test('accepts one to three ranked candidates without changing their estimated percentages', async () => {
   for (const likelihoods of [[70], [80, 50], [70, 20, 10], [100, 0]]) {
     const { state, service } = transport();
-    const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     const body = response();
     body.result.disease_candidates = likelihoods.map((likelihood, index) => ({
       name: ['疑似早疫病', '斑枯病', '叶霉病'][index], likelihood, reason: '需要进一步鉴别'
@@ -219,17 +220,17 @@ test('page separates the current suspected disease from alternatives and support
   for (const count of [1, 2]) {
     const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
     const body = response(); body.result.disease_candidates = body.result.disease_candidates.slice(0, count);
-    page.setData({ photoPath: '/photo.jpg' });
+    page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg' });
     const request = page.recognize(); pending.resolve(body); await request;
     assert.equal(JSON.stringify(page.data.resultView.primaryDisease), JSON.stringify(body.result.disease_candidates[0]));
     assert.equal(JSON.stringify(page.data.resultView.alternativeDiseases), JSON.stringify(body.result.disease_candidates.slice(1)));
   }
 });
 
-for (const status of ['healthy', 'uncertain', 'not_tomato']) {
+for (const status of ['healthy', 'uncertain', 'crop_mismatch', 'unsupported_crop']) {
   test(`page does not manufacture disease percentages for ${status}`, async () => {
     const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
-    page.setData({ photoPath: '/photo.jpg' });
+    page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg' });
     const request = page.recognize(); pending.resolve(response(status)); await request;
     assert.equal(page.data.resultView.primaryDisease, null);
     assert.equal(JSON.stringify(page.data.resultView.alternativeDiseases), '[]');
@@ -239,7 +240,7 @@ for (const status of ['healthy', 'uncertain', 'not_tomato']) {
 test('network timeout, disconnect and native cancellation have distinct codes', async () => {
   for (const [errMsg, code] of [['uploadFile:fail timeout', 'NETWORK_TIMEOUT'], ['connection refused', 'NETWORK_ERROR'], ['uploadFile:fail abort', 'REQUEST_CANCELLED']]) {
     const { state, service } = transport();
-    const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     state.options.fail({ errMsg });
     await assert.rejects(request.promise, (error) => error.code === code && /[\u4e00-\u9fff]/.test(error.message));
   }
@@ -247,7 +248,7 @@ test('network timeout, disconnect and native cancellation have distinct codes', 
 
 test('abort settles once even if native abort callback or late success occurs', async () => {
   const { state, service } = transport();
-  const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+  const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
   request.abort(); request.abort();
   state.options.success({ statusCode: 200, data: JSON.stringify(response()) });
   await assert.rejects(request.promise, (error) => error.code === 'REQUEST_CANCELLED');
@@ -257,7 +258,7 @@ test('abort settles once even if native abort callback or late success occurs', 
 test('upload progress is clamped, ignores invalid/late values and protects against callback throws', async () => {
   const { state, service } = transport();
   const seen = [];
-  const request = service.uploadDiagnosis({ filePath: '/photo.jpg', onProgress(value) { seen.push(value); if (value === 50) throw new Error('UI'); } });
+  const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg', onProgress(value) { seen.push(value); if (value === 50) throw new Error('UI'); } });
   for (const progress of [-3, 50, 110, NaN]) state.progress({ progress });
   state.respond({ statusCode: 200, data: JSON.stringify(response()) });
   state.progress({ progress: 60 });
@@ -271,15 +272,15 @@ test('minimal native task mocks and synchronous platform errors are normalized',
     uploadFile(o) { o.success({ statusCode: 202, data: JSON.stringify(queued()) }); return {}; },
     request(o) { o.success({ statusCode: 200, data: response() }); return {}; }
   }, time);
-  const request = service.uploadDiagnosis({ filePath: '/photo.jpg', onProgress() {} });
+  const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg', onProgress() {} });
   time.advance(1500); await request.promise;
   const broken = loadService({ login(o) { o.success({ code: 'code' }); }, uploadFile() { throw new Error('platform error'); } }, clock());
-  await assert.rejects(broken.uploadDiagnosis({ filePath: '/photo.jpg' }).promise, (error) => error.code === 'NETWORK_ERROR');
+  await assert.rejects(broken.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' }).promise, (error) => error.code === 'NETWORK_ERROR');
 });
 
 test('page rejects duplicate submissions, locks edits and selection, and retains input on success', async () => {
   const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
-  page.setData({ photoPath: '/photo.jpg', description: '三天' });
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg', description: '三天' });
   const request = page.recognize();
   await page.recognize();
   page.choosePhoto(); page.removePhoto(); page.onDescriptionInput({ detail: { value: '修改' } });
@@ -298,7 +299,7 @@ test('page rejects duplicate submissions, locks edits and selection, and retains
 
 test('page failure resets busy and keeps input for explicit retry', async () => {
   const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
-  page.setData({ photoPath: '/photo.jpg', description: '叶片黄斑' });
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg', description: '叶片黄斑' });
   const request = page.recognize();
   pending.reject(Object.assign(new Error('网络不通，请重试'), { code: 'NETWORK_ERROR' }));
   await request;
@@ -313,7 +314,7 @@ test('page failure resets busy and keeps input for explicit retry', async () => 
 
 test('new photo clears prior diagnosis and approval; preview requires approval', () => {
   const { page, wx } = pageHarness(() => { throw new Error('must not upload on selection'); });
-  page.setData({ photoPath: '/old.jpg', resultView: { summary: 'old' }, error: 'old error' });
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/old.jpg', resultView: { summary: 'old' }, error: 'old error' });
   page.choosePhoto();
   assert.equal(wx.selection.count, 1);
   assert.equal(JSON.stringify(wx.selection.mediaType), '["image"]');
@@ -332,7 +333,7 @@ test('new photo clears prior diagnosis and approval; preview requires approval',
 
 test('oversized/unreadable images do not replace selected image, selection cancel is quiet', () => {
   const { page, wx } = pageHarness();
-  page.setData({ photoPath: '/old.jpg' });
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/old.jpg' });
   page.choosePhoto(); choose(wx, { tempFilePath: '/huge.jpg', size: config.MAX_IMAGE_BYTES + 1 });
   assert.equal(page.data.photoPath, '/old.jpg');
   assert.match(page.data.error, /8 MB/);
@@ -345,7 +346,7 @@ test('oversized/unreadable images do not replace selected image, selection cance
 
 test('description changes and removal clear stale output and enforce 500 characters', () => {
   const { page } = pageHarness();
-  page.setData({ photoPath: '/photo.jpg', resultView: { summary: 'old' }, error: 'old error' });
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg', resultView: { summary: 'old' }, error: 'old error' });
   page.onDescriptionInput({ detail: { value: '叶'.repeat(520) } });
   assert.equal(page.data.description.length, 500);
   assert.equal(page.data.resultView, null); assert.equal(page.data.error, '');
@@ -355,7 +356,7 @@ test('description changes and removal clear stale output and enforce 500 charact
 
 test('unload aborts active request and suppresses late progress, success and selection updates', async () => {
   const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
-  page.setData({ photoPath: '/photo.jpg' }); const request = page.recognize();
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg' }); const request = page.recognize();
   page.onUnload(); const count = page.updates.length;
   pending.state.options.onProgress(90); pending.resolve(response()); await request;
   assert.equal(pending.state.aborted, 1); assert.equal(page.updates.length, count);
@@ -366,8 +367,9 @@ test('unload aborts active request and suppresses late progress, success and sel
 
 test('unload suppresses late rejection and no photo means no network call', async () => {
   const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
-  await page.recognize(); assert.equal(pending.state.calls, 0); assert.match(page.data.error, /先选择/);
-  page.setData({ photoPath: '/photo.jpg' }); const request = page.recognize();
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄' });
+  await page.recognize(); assert.equal(pending.state.calls, 0); assert.match(page.data.error, /照片/);
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg' }); const request = page.recognize();
   page.onUnload(); const before = page.updates.length;
   pending.reject(Object.assign(new Error('late'), { code: 'NETWORK_ERROR' })); await request;
   assert.equal(page.updates.length, before);
@@ -386,7 +388,7 @@ test('every application JSON parses and all production JavaScript passes Node sy
   }
   const project = JSON.parse(fs.readFileSync(path.join(root, 'project.config.json'), 'utf8'));
   assert.equal(project.miniprogramRoot, 'miniprogram/'); assert.equal(project.compileType, 'miniprogram'); assert.equal(project.appid, 'touristappid');
-  for (const file of ['miniprogram/app.js', 'miniprogram/config.js', 'miniprogram/services/diagnosis.js', 'miniprogram/pages/index/index.js']) {
+  for (const file of ['miniprogram/app.js', 'miniprogram/config.js', 'miniprogram/data/crops.js', 'miniprogram/services/diagnosis.js', 'miniprogram/pages/index/index.js']) {
     const result = spawnSync(process.execPath, ['--check', path.join(root, file)], { encoding: 'utf8' });
     assert.equal(result.status, 0, `${file}: ${result.stderr}`);
   }
@@ -405,7 +407,7 @@ test('all WXML conditional visibility uses dynamic bindings rather than truthy l
 test('login precedes upload, failures and malformed codes upload nothing', async () => {
   for (const result of [null, {}, { code: '' }, { code: 'x'.repeat(513) }]) {
     const { state, service } = transport({ autoLogin: false });
-    const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     assert.equal(state.calls, 0);
     if (result === null) state.login.fail({ errMsg: 'unsafe raw reason' }); else state.login.success(result);
     await assert.rejects(request.promise, e => e.code === 'LOGIN_FAILED' && !e.message.includes('unsafe'));
@@ -415,11 +417,11 @@ test('login precedes upload, failures and malformed codes upload nothing', async
 
 test('202 uses only configured origin and bearer token, stages and repeated polls wait', async () => {
   const { state, service, time } = transport(); const stages = [];
-  const request = service.uploadDiagnosis({ filePath: '/photo.jpg', onStage(stage) { stages.push(stage); } });
+  const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg', onStage(stage) { stages.push(stage); } });
   state.options.success({ statusCode: 202, data: JSON.stringify(queued({ poll_after_ms: 0 })) });
   assert.deepEqual(stages, ['checking']); time.advance(999); assert.equal(state.polls.length, 0);
   time.advance(1); const poll = state.polls[0];
-  assert.equal(poll.url, config.API_BASE_URL.replace(/\/+$/, '') + '/api/diagnose/job_123-abc');
+  assert.equal(poll.url, config.API_BASE_URL.replace(/\/+$/, '') + '/api/v2/diagnose/job_123-abc');
   assert.equal(poll.header.Authorization, 'Bearer token_123-abc'); assert.equal(poll.method, 'GET');
   poll.success({ statusCode: 202, data: { status: 'analysing', poll_after_ms: 999999 } });
   assert.deepEqual(stages, ['checking', 'analysing']); time.advance(4999); assert.equal(state.polls.length, 1);
@@ -433,7 +435,7 @@ test('upload direct 200 and malformed queued envelopes fail closed without polli
     queued({ status: 'analysing' }), queued({ poll_after_ms: '1500' }), queued({ poll_after_ms: NaN }),
     queued({ poll_url: 'https://evil.test/job' }), queued({ url: '//evil.test' })];
   for (let i = 0; i < bodies.length; i++) {
-    const { state, service } = transport(); const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const { state, service } = transport(); const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     state.options.success({ statusCode: i === 0 ? 200 : 202, data: JSON.stringify(bodies[i]) });
     await assert.rejects(request.promise, e => e.code === 'INVALID_RESPONSE'); assert.equal(state.polls.length, 0);
   }
@@ -442,7 +444,7 @@ test('upload direct 200 and malformed queued envelopes fail closed without polli
 test('malformed polling state, delay and redirects reject instead of exposing results', async () => {
   for (const body of [{ status: 'pass', poll_after_ms: 1000 }, { status: 'checking' },
     { status: 'analysing', poll_after_ms: true }, { status: 'checking', poll_after_ms: 1000, url: 'https://evil.test' }]) {
-    const { state, service, time } = transport(); const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    const { state, service, time } = transport(); const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     state.options.success({ statusCode: 202, data: JSON.stringify(queued()) }); time.advance(1500);
     state.polls[0].success({ statusCode: 202, data: body });
     await assert.rejects(request.promise, e => e.code === 'INVALID_RESPONSE'); assert.equal(time.size, 0);
@@ -452,7 +454,7 @@ test('malformed polling state, delay and redirects reject instead of exposing re
 test('abort in login, upload, poll and delay cancels owned work and ignores all late callbacks', async () => {
   for (const phase of ['login', 'upload', 'delay', 'poll']) {
     const { state, service, time } = transport({ autoLogin: phase !== 'login' }); const stages = [];
-    const request = service.uploadDiagnosis({ filePath: '/photo.jpg', onStage: s => stages.push(s) });
+    const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg', onStage: s => stages.push(s) });
     if (['delay', 'poll'].includes(phase)) state.options.success({ statusCode: 202, data: JSON.stringify(queued()) });
     if (phase === 'poll') time.advance(1500);
     request.abort(); request.abort();
@@ -469,7 +471,7 @@ test('abort in login, upload, poll and delay cancels owned work and ignores all 
 
 test('overall deadline is 32 minutes from login and aborts an active poll independently of network timeout', async () => {
   const { state, service, time } = transport({ autoLogin: false });
-  const request = service.uploadDiagnosis({ filePath: '/photo.jpg' }); time.advance(1000);
+  const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' }); time.advance(1000);
   state.login.success({ code: 'code' });
   assert.equal(state.options.timeout, config.UPLOAD_TIMEOUT_MS);
   state.options.success({ statusCode: 202, data: JSON.stringify(queued()) }); time.advance(1500);
@@ -481,8 +483,8 @@ test('overall deadline is 32 minutes from login and aborts an active poll indepe
 
 test('all moderation, login and job errors use fixed messages rather than upstream text', async () => {
   for (const code of ['SECURITY_NOT_CONFIGURED', 'SECURITY_UNAVAILABLE', 'SECURITY_TIMEOUT', 'LOGIN_FAILED',
-    'CONTENT_REJECTED', 'TOO_MANY_REQUESTS', 'QUEUE_FULL', 'JOB_NOT_FOUND', 'NOT_FOUND']) {
-    const { state, service } = transport(); const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+    'CONTENT_REJECTED', 'INVALID_REQUEST', 'INVALID_MODEL_RESPONSE', 'TOO_MANY_REQUESTS', 'QUEUE_FULL', 'JOB_NOT_FOUND', 'NOT_FOUND']) {
+    const { state, service } = transport(); const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
     state.options.success({ statusCode: 422, data: JSON.stringify({ error: { code, message: 'unsafe raw content' } }) });
     await assert.rejects(request.promise, e => e.code === code && !e.message.includes('unsafe') &&
       (code !== 'CONTENT_REJECTED' || e.message === '您提交的内容含违规信息。'));
@@ -491,7 +493,7 @@ test('all moderation, login and job errors use fixed messages rather than upstre
 
 test('rejection clears all submitted content and approval; page never displays upstream reason', async () => {
   const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
-  page.setData({ photoPath: '/photo.jpg', description: 'input', photoApproved: true }); const request = page.recognize();
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg', description: 'input', photoApproved: true }); const request = page.recognize();
   assert.equal(page.data.photoApproved, false);
   pending.state.options.onStage('checking'); assert.equal(page.data.stage, 'checking');
   pending.state.options.onStage('analysing'); assert.equal(page.data.stage, 'analysing');
@@ -503,14 +505,14 @@ test('rejection clears all submitted content and approval; page never displays u
 
 test('successful completion alone approves preview; failures and stale stages cannot approve', async () => {
   const pending = pendingUpload(); const { page, wx } = pageHarness(pending.upload);
-  page.setData({ photoPath: '/photo.jpg', photoApproved: true }); const request = page.recognize();
+  page.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg', photoApproved: true }); const request = page.recognize();
   page.previewPhoto(); assert.equal(wx.preview, undefined);
   pending.resolve(response()); await request; assert.equal(page.data.photoApproved, true);
   page.previewPhoto(); assert.equal(wx.preview.current, '/photo.jpg');
   const before = page.updates.length; pending.state.options.onStage('checking'); pending.state.options.onProgress(99);
   assert.equal(page.updates.length, before);
   const failed = pendingUpload(); const other = pageHarness(failed.upload).page;
-  other.setData({ photoPath: '/photo.jpg', photoApproved: true }); const work = other.recognize();
+  other.setData({ selectedCropId: 'tomato', selectedCropName: '番茄', photoPath: '/photo.jpg', photoApproved: true }); const work = other.recognize();
   failed.reject(Object.assign(new Error('service'), { code: 'SECURITY_UNAVAILABLE' })); await work;
   assert.equal(other.data.photoApproved, false); assert.equal(other.data.photoPath, '/photo.jpg');
 });
@@ -526,7 +528,7 @@ test('WXML gates photo pixels and gives rejection its own fixed-message-only pan
 
 test('poll network failures do not repost and completed native slots ignore duplicate callbacks', async () => {
   const { state, service, time } = transport(); const stages = [];
-  const request = service.uploadDiagnosis({ filePath: '/photo.jpg', onStage: s => stages.push(s) });
+  const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg', onStage: s => stages.push(s) });
   state.options.success({ statusCode: 202, data: JSON.stringify(queued()) }); time.advance(1500);
   state.login.success({ code: 'duplicate' });
   state.options.success({ statusCode: 202, data: JSON.stringify(queued()) });
@@ -538,9 +540,122 @@ test('poll network failures do not repost and completed native slots ignore dupl
 });
 
 test('terminal rejection returned by polling is fixed and never exposes unchecked content', async () => {
-  const { state, service, time } = transport(); const request = service.uploadDiagnosis({ filePath: '/photo.jpg' });
+  const { state, service, time } = transport(); const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
   state.options.success({ statusCode: 202, data: JSON.stringify(queued()) }); time.advance(1500);
   state.polls[0].success({ statusCode: 422, data: { error: { code: 'CONTENT_REJECTED', message: 'unsafe input' } } });
   await assert.rejects(request.promise, e => e.code === 'CONTENT_REJECTED' && e.message === '您提交的内容含违规信息。');
   assert.equal(time.size, 0);
+});
+
+
+test('six public crop options have no initial selection and render as visible buttons', () => {
+  const crops = require('../miniprogram/data/crops');
+  assert.deepEqual(crops, [
+    { id: 'tomato', name: '番茄' }, { id: 'cucumber', name: '黄瓜' },
+    { id: 'pepper', name: '辣椒' }, { id: 'eggplant', name: '茄子' },
+    { id: 'potato', name: '马铃薯' }, { id: 'chinese_cabbage', name: '大白菜' }
+  ]);
+  const { page } = pageHarness();
+  assert.equal(page.data.selectedCropId, ''); assert.equal(page.data.selectedCropName, '');
+  assert.equal(JSON.stringify(page.data.cropOptions), JSON.stringify(crops));
+  const template = fs.readFileSync(path.join(root, 'miniprogram/pages/index/index.wxml'), 'utf8');
+  assert.match(template, /<button[^>]*wx:for="{{cropOptions}}"[^>]*wx:key="id"[^>]*data-crop-id="{{item.id}}"[^>]*bindtap="onCropSelect"[^>]*disabled="{{busy \|\| choosing}}"[^>]*>{{item.name}}<\/button>/);
+  assert.match(template, /!selectedCropId/);
+});
+
+test('missing or invalid crop fails before login and missing selection blocks page recognition', async () => {
+  for (const cropId of [undefined, '', 'cabbage', 'other', 'Tomato', null, 1]) {
+    const { service, state, time } = transport();
+    await assert.rejects(service.uploadDiagnosis({ filePath: '/photo.jpg', cropId }).promise, e => e.code === 'INVALID_REQUEST');
+    assert.equal(state.logins, 0); assert.equal(state.calls, 0); assert.equal(time.size, 0);
+  }
+  const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
+  page.setData({ photoPath: '/photo.jpg' }); await page.recognize();
+  assert.equal(pending.state.calls, 0); assert.match(page.data.error, /作物/);
+});
+
+test('each crop serializes v2 form and stays captured across caller edits', async () => {
+  for (const { id } of require('../miniprogram/data/crops')) {
+    const { service, state } = transport({ autoLogin: false });
+    const input = { cropId: id, filePath: '/photo.jpg' }; const request = service.uploadDiagnosis(input);
+    input.cropId = 'other'; state.login.success({ code: 'code' });
+    assert.equal(state.options.formData.crop_id, id);
+    state.respond({ statusCode: 200, data: response('healthy', id) });
+    assert.equal((await request.promise).result.crop.selected, id);
+  }
+});
+
+test('v2 crop verification and status table is enforced exhaustively with strict submitted echo', async () => {
+  for (const verification of ['matched', 'unverified', 'mismatch', 'unsupported']) {
+    for (const detected of ['tomato', 'cucumber', 'other', null]) {
+      for (const status of ['suspected_disease', 'healthy', 'uncertain', 'crop_mismatch', 'unsupported_crop']) {
+        const { service, state } = transport(); const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
+        const body = response(status); Object.assign(body.result.crop, { verification, detected });
+        state.respond({ statusCode: 200, data: body });
+        const valid = (['suspected_disease', 'healthy', 'uncertain'].includes(status) &&
+          (verification === 'matched' && detected === 'tomato' || verification === 'unverified' && detected === null)) ||
+          (verification === 'mismatch' && detected === 'cucumber' && status === 'crop_mismatch') ||
+          (verification === 'unsupported' && detected === 'other' && status === 'unsupported_crop');
+        if (valid) await request.promise;
+        else await assert.rejects(request.promise, e => e.code === 'INVALID_MODEL_RESPONSE');
+      }
+    }
+  }
+  for (const mutate of [
+    b => { b.result.crop.selected = 'cucumber'; b.result.crop.detected = 'cucumber'; },
+    b => { delete b.result.crop; }, b => { b.result.crop.selected = 'other'; },
+    b => { b.result.crop.detected = 'cabbage'; }, b => { b.result.crop.verification = 'sure'; },
+    b => { b.result.crop.reason = ' '; }, b => { b.result.crop.reason = '字'.repeat(301); },
+    b => { b.result.crop.extra = 'unchecked'; }, b => { b.result.extra = 'unchecked'; },
+    b => { b.extra = 'unchecked'; }, b => { b.result.disease_candidates[0].extra = 'unchecked'; },
+    b => { b.result.possible_causes[0].extra = 'unchecked'; },
+    b => { b.result.summary = '字'.repeat(801); }, b => { b.result.observed_symptoms = Array(7).fill('线索'); },
+    b => { b.result.recommendations = ['字'.repeat(301)]; },
+    b => { b.result.possible_causes = Array(4).fill({ name: '原因', reason: '说明' }); }
+  ]) {
+    const { service, state } = transport(); const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
+    const body = response(); mutate(body); state.respond({ statusCode: 200, data: body });
+    await assert.rejects(request.promise, e => e.code === 'INVALID_MODEL_RESPONSE');
+  }
+  for (const status of ['crop_mismatch', 'unsupported_crop']) {
+    for (const field of ['disease_name', 'disease_candidates', 'possible_causes']) {
+      const { service, state } = transport(); const request = service.uploadDiagnosis({ cropId: 'tomato', filePath: '/photo.jpg' });
+      const body = response(status); body.result[field] = response().result[field];
+      state.respond({ statusCode: 200, data: body }); await assert.rejects(request.promise, e => e.code === 'INVALID_MODEL_RESPONSE');
+    }
+  }
+});
+
+test('crop changes clear stale output, approval and progress while retaining photo and description; selection locks', async () => {
+  const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
+  const select = id => page.onCropSelect({ currentTarget: { dataset: { cropId: id } } });
+  page.setData({ photoPath: '/photo.jpg', description: '线索', resultView: {}, photoApproved: true, rejected: true, error: 'old', uploadProgress: 100, uploadComplete: true, stage: 'analysing' });
+  select('cucumber'); assert.equal(page.data.selectedCropName, '黄瓜');
+  assert.equal(page.data.photoPath, '/photo.jpg'); assert.equal(page.data.description, '线索');
+  assert.equal(page.data.resultView, null); assert.equal(page.data.photoApproved, false);
+  assert.equal(page.data.rejected, false); assert.equal(page.data.error, '');
+  assert.equal(page.data.uploadProgress, 0); assert.equal(page.data.uploadComplete, false); assert.equal(page.data.stage, 'uploading');
+  select('bad'); assert.equal(page.data.selectedCropId, 'cucumber');
+  page.setData({ choosing: true }); select('pepper'); assert.equal(page.data.selectedCropId, 'cucumber');
+  page.setData({ choosing: false }); const work = page.recognize(); select('pepper');
+  assert.equal(page.data.selectedCropId, 'cucumber'); assert.equal(pending.state.options.cropId, 'cucumber');
+  pending.resolve(response('healthy', 'cucumber')); await work;
+  select('pepper'); const count = page.updates.length;
+  pending.state.options.onProgress(95); pending.state.options.onStage('checking'); assert.equal(page.updates.length, count);
+  page.onUnload(); select('eggplant'); assert.equal(page.data.selectedCropId, 'pepper');
+});
+
+test('checked unverified result prominently labels conditional analysis and other statuses guide reselection', async () => {
+  for (const status of ['suspected_disease', 'crop_mismatch', 'unsupported_crop']) {
+    const pending = pendingUpload(); const { page } = pageHarness(pending.upload);
+    page.setData({ photoPath: '/photo.jpg', selectedCropId: 'cucumber', selectedCropName: '黄瓜' });
+    const work = page.recognize(); assert.equal(page.data.resultView, null);
+    const body = response(status, 'cucumber', status === 'suspected_disease' ? 'unverified' : undefined);
+    pending.resolve(body); await work;
+    assert.equal(page.data.resultView.selectedCropName, '黄瓜');
+    if (status === 'suspected_disease') assert.equal(page.data.resultView.conditionalLabel, '按你选择的黄瓜分析');
+    else { assert.equal(page.data.resultView.primaryDisease, null); assert.match(page.data.resultView.reselectGuidance, /重新选择/); }
+  }
+  const template = fs.readFileSync(path.join(root, 'miniprogram/pages/index/index.wxml'), 'utf8');
+  assert.match(template, /图片无法独立确认作物/); assert.match(template, /{{resultView.crop.reason}}/);
 });

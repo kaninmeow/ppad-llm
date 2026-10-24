@@ -5,10 +5,9 @@
 .hero-title { margin-top: 24rpx; font-size: 48rpx; font-weight: 700; letter-spacing: -1rpx; position: relative; z-index: 1; }
 .hero-copy { margin-top: 14rpx; font-size: 25rpx; color: #6c7868; max-width: 510rpx; line-height: 1.7; position: relative; z-index: 1; }
 .hero-note { margin-top: 20rpx; font-size: 20rpx; color: #71806c; }
-.tomato-art { position: absolute; right: 4rpx; top: 98rpx; width: 85rpx; height: 79rpx; background: #d98568; border-radius: 46% 45% 49% 49%; transform: rotate(12deg); opacity: .7; }
-.tomato-leaf { position: absolute; background: #66815b; width: 36rpx; height: 17rpx; top: -7rpx; left: 15rpx; border-radius: 0 90% 0 90%; transform: rotate(20deg); }
-.leaf-two { left: 39rpx; transform: rotate(100deg); }
-.tomato-shine { position: absolute; top: 18rpx; left: 16rpx; width: 11rpx; height: 25rpx; background: #eeb49b; border-radius: 50%; transform: rotate(20deg); }
+.leaf-art { position: absolute; right: 4rpx; top: 98rpx; width: 85rpx; height: 79rpx; opacity: .7; }
+.hero-leaf { position: absolute; background: #8ca678; width: 64rpx; height: 35rpx; top: 8rpx; left: 0; border-radius: 60rpx 0; transform: rotate(-30deg); }
+.leaf-two { top: 38rpx; left: 22rpx; width: 52rpx; height: 28rpx; transform: rotate(35deg); background: #b2c39d; }
 .card { background: #fffef9; border: 1rpx solid #e7e9dc; border-radius: 32rpx; padding: 32rpx 28rpx; box-shadow: 0 8rpx 32rpx rgba(40, 66, 42, .035); }
 .section-heading { display: flex; align-items: center; gap: 14rpx; }
 .step { font-size: 23rpx; font-weight: 600; color: #6b885e; }
@@ -50,7 +49,7 @@
 .result-eyebrow { font-size: 21rpx; color: #819075; letter-spacing: 2rpx; margin-bottom: 22rpx; }
 .status-badge { display: inline-block; padding: 10rpx 18rpx; background: #e9efdf; color: #53723d; border-radius: 12rpx; font-size: 25rpx; font-weight: 600; }
 .status-suspected_disease { background: #f4e8d6; color: #977343; }
-.status-uncertain, .status-not_tomato { background: #eeeee6; color: #737967; }
+.status-uncertain, .status-crop_mismatch, .status-unsupported_crop { background: #eeeee6; color: #737967; }
 .disease-name { font-size: 38rpx; font-weight: 700; margin-top: 22rpx; }
 .summary { margin-top: 20rpx; font-size: 27rpx; line-height: 1.85; color: #4f624c; overflow-wrap: break-word; }
 .result-section { margin-top: 30rpx; border-top: 1rpx solid #ebeee2; padding-top: 26rpx; }
@@ -83,3 +82,15 @@
 .footer-line { height: 1rpx; width: 42rpx; background: #d5dcc9; margin: 12rpx 0; }
 
 .photo-pending { min-height: 320rpx; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f4f7f2; border-radius: 20rpx; }
+
+.crop-options { display: flex; flex-wrap: wrap; justify-content: space-between; margin-top: 24rpx; }
+.crop-button { width: 31%; margin: 0 0 14rpx; padding: 18rpx 4rpx; border-radius: 16rpx; background: #f1f4e9; border: 2rpx solid #e1e7d6; color: #526a47; font-size: 25rpx; line-height: 1.4; }
+.crop-selected { border-color: #638252; background: #e2ebd5; color: #244d35; font-weight: 600; }
+.crop-button[disabled] { opacity: .65; }
+.crop-tip { color: #7b8772; font-size: 21rpx; line-height: 1.7; }
+.crop-assessment { margin-top: 22rpx; font-size: 24rpx; line-height: 1.8; color: #63735a; }
+.crop-result-name { font-weight: 600; }
+.crop-reason { margin-top: 10rpx; overflow-wrap: break-word; }
+.conditional-panel { margin: 16rpx 0; padding: 20rpx; background: #f4e8d6; border: 1rpx solid #e4d0af; border-radius: 16rpx; color: #805d32; }
+.conditional-title { font-size: 28rpx; font-weight: 600; }
+.reselect-guidance { margin-top: 16rpx; font-weight: 600; color: #85523b; }

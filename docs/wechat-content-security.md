@@ -1,6 +1,6 @@
 # 微信内容安全部署与联调
 
-代码已接入微信登录、用户描述检测、图片异步检测和模型输出文本检测。**截至 2026-10-22，尚未验证真实微信接入、HTTPS、公网回调、模拟器或手机全流程。** 当前本地配置检查仅确认模型已填写配置；内容安全和公网 HTTPS 尚未配置。这些标志只表示设置是否存在，不证明远程服务可用。
+代码已接入微信登录、用户描述检测、图片异步检测和模型输出文本检测，新增六作物 v2 客户端。**历史记录（2026-10-22）：当时尚未验证真实微信接入、HTTPS、公网回调、模拟器或手机全流程，本地仅确认已填写模型配置。** 2026-10-24 本次变更没有重新检查当前外部 HTTPS/微信配置，也没有进行新的真实模型调用、设备联调或准确率验证。本地设置标志只表示是否填写，不证明远程服务可用。
 
 ## 处理与存储边界
 
@@ -31,7 +31,7 @@ api.example.com {
 ```
 
 5. 将 `PUBLIC_BASE_URL` 设置为 `https://api.example.com`。它是微信下载临时图片的公网 HTTPS origin，不能填写本机地址、HTTP、用户名密码、查询参数或 fragment；支持一致的反向代理路径前缀，但该示例不使用前缀。
-6. HTTPS 部署成功后，由操作者将 `miniprogram/config.js` 的现有 HTTP `API_BASE_URL` 改为同一个 HTTPS 地址。本次实现保留用户现有的 `http://api.kanin.cn:8189` 配置；该地址尚不满足完整接入要求。不要把后端密钥复制到此文件。
+6. HTTPS 部署成功后，由操作者将 `miniprogram/config.js` 的 `API_BASE_URL` 设置为同一个 HTTPS 地址。本次未修改该文件；2026-10-22 曾记录其值为 HTTP 地址，这不能证明当前外部服务配置状态。正式联调前重新核对真实地址，不要把后端密钥复制到此文件。
 
 | 后端变量 | 用途 |
 | --- | --- |
@@ -55,7 +55,9 @@ api.example.com {
 
 ## 接口约定
 
-`POST /api/diagnose` 接收 multipart `image`、可选 `description`（最多 500 字）、必填 `login_code`（非空，最多 512 字）。每次提交重新登录；禁止自动重复 POST 或自动重试付费模型。
+`POST /api/v2/diagnose` 接收 multipart `image`、必填 `crop_id`、可选 `description`（最多 500 字）、必填 `login_code`（非空，最多 512 字）。每次提交重新登录；禁止自动重复 POST 或自动重试付费模型。
+
+`crop_id` 无默认值，仅允许 `tomato`（番茄）、`cucumber`（黄瓜）、`pepper`（辣椒）、`eggplant`（茄子）、`potato`（马铃薯）、`chinese_cabbage`（大白菜）。大白菜不含小白菜和甘蓝。缺少或非法值返回 422 `INVALID_REQUEST`；客户端在登录前拒绝非法选择。用户选择是上下文，不能作为已核实的视觉证据。
 
 受理成功仅返回 **HTTP 202**：
 
@@ -63,18 +65,28 @@ api.example.com {
 {"job_id":"opaque-id","job_token":"private-token","status":"checking","poll_after_ms":1500}
 ```
 
-**202 表示已受理，尚未检测通过或识别完成。** 小程序不接受旧版 POST 直接 200。`job_id` 和 `job_token` 是有界、非空、URL 安全的随机字符串。客户端仅从已配置基地址构造 `GET /api/diagnose/{job_id}`，请求头为 `Authorization: Bearer <job_token>`，不能跟随响应中的自定义轮询 URL。job token 不进 URL、UI、持久化或日志。
+**202 表示已受理，尚未检测通过或识别完成。** 小程序不接受旧版 POST 直接 200。`job_id` 和 `job_token` 是有界、非空、URL 安全的随机字符串。客户端仅从已配置基地址构造 `GET /api/v2/diagnose/{job_id}`，请求头为 `Authorization: Bearer <job_token>`，不能跟随响应中的自定义轮询 URL。job token 不进 URL、UI、持久化或日志。
 
 进行中 GET 返回 202 `{"status":"checking"或"analysing","poll_after_ms":1500}`。客户端将间隔限制在 1000–5000 ms，单次网络超时与总体期限分开；从登录开始总等待上限为 32 分钟，退出页面停止请求与定时器并忽略晚到回调。退出或超时只停止客户端等待，后端已受理任务可能继续完成，不能据此立即自动重复付费提交。
 
-只有 GET **200** 才交付原有 `DiagnosisResponse`：`request_id`、`model`、`elapsed_ms`、`notice` 和 `result`。结果状态和病害候选概率结构不变。此前前端只显示占位图且禁止预览；成功后才显示照片与完整结果。服务/网络错误保留本地输入供用户手动重试，不能视为检测通过。
+只有 GET **200** 才交付 `MultiCropDiagnosisResponse`：`request_id`、`model`、`elapsed_ms`、`notice` 和 `result`。v2 保留原有病害候选结构与长度限制，增加 `result.crop` 的 `selected`、`detected`、`verification` 和 1–300 字非空 `reason`。`selected` 必须等于本次提交值，所有层级均不允许未知字段。
+
+| verification | detected | 允许的 result.status |
+| --- | --- | --- |
+| `matched` | 与 selected 相同 | `suspected_disease` / `healthy` / `uncertain` |
+| `unverified` | `null` | `suspected_disease` / `healthy` / `uncertain` |
+| `mismatch` | 另一受支持的作物 ID | `crop_mismatch` |
+| `unsupported` | `other` | `unsupported_crop` |
+
+所有非病害状态均为 `disease_name: null` 和 `disease_candidates: []`；`crop_mismatch`、`unsupported_crop` 还必须有 `possible_causes: []`。关系不符、回显与提交不符或嵌套结构非法均以固定 `INVALID_MODEL_RESPONSE` 结束，不修改或自动重试结果。`crop.reason` 同其他所有输出文本一起经内容安全检查后交付。`unverified` 页面突出“按你选择的{作物}分析”和“图片无法独立确认作物”，错配/不支持状态提示重新选择，不展示病害/概率部分。此前前端只显示占位图且禁止预览；成功后才显示照片与完整结果。服务/网络错误保留本地输入供用户手动重试，不能视为检测通过。
 
 错误格式仍为 `{"error":{"code":"…","message":"…"}}`，小程序显示固定安全说明，忽略上游原始错误文案：
 
 | HTTP | code | 行为 |
 | --- | --- | --- |
 | 401 | `LOGIN_FAILED` | 登录失败，不继续上传/分析 |
-| 422 | `INVALID_REQUEST` | 检查输入，手动重试 |
+| 422 | `INVALID_REQUEST` | 检查作物、图片和描述，手动重试 |
+| 502 | `INVALID_MODEL_RESPONSE` | 结果结构或作物关系不合法，不显示结果/照片，不自动重试 |
 | 400 | `INVALID_IMAGE` / `UNSUPPORTED_IMAGE` | 检查图片是否有效及格式是否受支持，手动重试 |
 | 413 | `IMAGE_TOO_LARGE` | 选择符合大小限制的图片，手动重试 |
 | 422 | `CONTENT_REJECTED` | 清空照片、描述、结果和预览许可，仅显示 `您提交的内容含违规信息。`，不展示类别、标签、命中词或原文 |
@@ -88,14 +100,21 @@ api.example.com {
 
 `GET /api/moderation-media/{media_token}.jpg` 是供微信临时下载规范化图片的能力地址，持有者在有效期内可下载。它与 job token 独立，终态或到期失效，**必须按秘密处理**。不要记录请求体、Authorization、媒体完整 URL、callback 签名查询串或上游原始错误；关闭 Uvicorn access log，不给 Caddy 示例添加 access log，其他网关、APM 和 CDN 也要避免保存这些路径与查询串。后端动态响应使用 `Cache-Control: no-store`，不要在代理层覆盖为公开缓存。
 
+## 后端优先发布与兼容
+
+1. 先部署同时提供 v1 和 v2 的后端，保留原 `POST /api/diagnose`、`GET /api/diagnose/{job_id}`、原 `DiagnosisResponse` 与 `not_tomato` 等状态；v1 不新增必填 crop_id。
+2. 在隔离测试中验证旧接口回归、v2 必填参数/结构关系、私有轮询及输入/输出检测；准备同 AppID、HTTPS、安全回调与合法域名。
+3. 再发布只访问 v2 的六作物客户端，按下节与[多作物验证矩阵](multi-crop-validation.md)实测。客户端不自动降级到 v1，不自动重试付费调用。
+4. 新客户端仍在线时，后端回退不得撤掉 v2；需要撤掉 v2 时先安排客户端回退与兼容窗口。单实例重启会使在途任务失效，应提示手动重新提交。此次代码变更没有执行发布或验证线上状态。
+
 ## 真实微信烟测（尚未执行）
 
 1. 使用有权限的同一 AppID 配好 HTTPS、后台合法域名、出口 IP 白名单和 AES 消息推送。只检查 health 设置标志和后台验证结果，不在报告中记录 Secret。
-2. 在微信开发者工具开启域名校验，用本人账号登录。选择正常番茄照片，确认只见占位图且无法预览；点击识别后确认先登录、单次上传 202、轮询 Bearer 头、检测中到分析中、GET 200 后才出现照片/结果/预览。抓包截图隐藏 token、登录 code 和图片能力地址。
+2. 在微信开发者工具开启域名校验，用本人账号登录。逐一明确选择六种支持的作物及其正常照片（初始不得默认选择），确认只见占位图且无法预览；点击识别后确认先登录、单次上传 202、轮询 Bearer 头、检测中到分析中、GET 200 后才出现照片/结果/预览。抓包截图隐藏 token、登录 code 和图片能力地址。
 3. 用微信官方允许的内容安全测试方式，在受控环境验证描述、图片、模型输出各自的拦截。确认违规界面只有固定消息并清空已提交内容，不回显违规内容；不要为测试触发真实违规传播或修改生产检测逻辑。模型输出拦截可先用隔离测试替身验证，不将模拟结果记为真实微信通过。
-4. 验证无权限/失效登录不继续上传；队列满、检测不可用、超时、失效任务分别给出安全提示；网络故障保留输入，但不显示照片。更换或清除照片、编辑描述清除旧结果和预览许可。
+4. 验证无权限/失效登录不继续上传；队列满、检测不可用、超时、失效任务分别给出安全提示；网络故障保留输入，但不显示照片。更换作物、照片、清除照片或编辑描述均清除旧结果和预览许可；更换作物保留本地照片/描述并清除进度；相册选择或识别中作物按钮锁定。
 5. 上传/轮询/等待期间退出页面，确认无后续 UI 更新或自动重发；重启单实例后旧任务失效，需手动重新提交。此类重新提交可能产生新的模型调用，应由用户主动发起。
-6. 手机真机在正常网络下重复正常流程和取消场景，记录日期、AppID 一致性（不记录 Secret）、HTTPS 与回调验证结果。只有这些实测完成后才能宣称完成真实微信联调。番茄病害准确率还需真实标注样本单独评估。
+6. 手机真机在正常网络下重复正常流程和取消场景，记录日期、AppID 一致性（不记录 Secret）、HTTPS 与回调验证结果。只有这些实测完成后才能宣称完成真实微信联调。六作物诊断准确率还需真实标注样本单独评估，不得把契约/页面测试视为准确率证据。
 
 ## 官方资料
 
