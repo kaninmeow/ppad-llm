@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
+from app.crops import CropId
 from app.errors import APIError
 from app.images import prepare_image
 from app.moderation import ModerationJobs
@@ -117,6 +118,28 @@ def create_app(
         login_code: Annotated[str, Form(min_length=1, max_length=512)],
         description: Annotated[str, Form()] = "",
     ):
+        return await submit_diagnosis(request, image, login_code, description)
+
+    @app.post("/api/v2/diagnose", status_code=202)
+    async def diagnose_crop(
+        request: Request,
+        image: Annotated[UploadFile, File()],
+        login_code: Annotated[str, Form(min_length=1, max_length=512)],
+        crop_id: Annotated[CropId, Form()],
+        description: Annotated[str, Form()] = "",
+    ):
+        return await submit_diagnosis(
+            request, image, login_code, description, crop_id=crop_id
+        )
+
+    async def submit_diagnosis(
+        request: Request,
+        image: UploadFile,
+        login_code: str,
+        description: str,
+        *,
+        crop_id: CropId | None = None,
+    ):
         description = description.strip()
         if not login_code.strip():
             raise APIError(422, "INVALID_REQUEST", "请先完成微信登录。")
@@ -132,8 +155,12 @@ def create_app(
         finally:
             await image.close()
         prepared = await run_in_threadpool(prepare_image, data, settings)
+        if crop_id is None:
+            return await request.app.state.moderation.submit(
+                prepared, description, login_code
+            )
         return await request.app.state.moderation.submit(
-            prepared, description, login_code
+            prepared, description, login_code, crop_id=crop_id
         )
 
     @app.get("/api/diagnose/{job_id}")
@@ -141,6 +168,14 @@ def create_app(
         require_security()
         result = request.app.state.moderation.get(
             job_id, request.headers.get("authorization", "")
+        )
+        return JSONResponse(result, status_code=202 if "status" in result else 200)
+
+    @app.get("/api/v2/diagnose/{job_id}")
+    async def crop_diagnosis_job(request: Request, job_id: str):
+        require_security()
+        result = request.app.state.moderation.get(
+            job_id, request.headers.get("authorization", ""), version=2
         )
         return JSONResponse(result, status_code=202 if "status" in result else 200)
 

@@ -2,6 +2,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from app.crops import CropId
+
 ShortText = Annotated[
     str,
     StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=300),
@@ -86,3 +88,51 @@ class DiagnosisResponse(StrictModel):
     elapsed_ms: int
     result: DiagnosisResult
     notice: str = "本结果仅基于图片进行初步识别，不能替代现场诊断。"
+
+
+class CropAssessment(StrictModel):
+    selected: CropId
+    detected: CropId | Literal["other"] | None
+    verification: Literal["matched", "unverified", "mismatch", "unsupported"]
+    reason: ShortText
+
+    @model_validator(mode="after")
+    def validate_detection(self) -> "CropAssessment":
+        valid = (
+            (self.verification == "matched" and self.detected == self.selected)
+            or (self.verification == "unverified" and self.detected is None)
+            or (
+                self.verification == "mismatch"
+                and self.detected not in (None, "other", self.selected)
+            )
+            or (self.verification == "unsupported" and self.detected == "other")
+        )
+        if not valid:
+            raise ValueError("crop verification and detected crop disagree")
+        return self
+
+
+class MultiCropDiagnosisResult(DiagnosisResult):
+    status: Literal[
+        "suspected_disease", "healthy", "uncertain", "crop_mismatch", "unsupported_crop"
+    ]
+    crop: CropAssessment
+
+    @model_validator(mode="after")
+    def validate_crop_status(self) -> "MultiCropDiagnosisResult":
+        required_status = {
+            "mismatch": "crop_mismatch",
+            "unsupported": "unsupported_crop",
+        }.get(self.crop.verification)
+        if required_status is not None:
+            if self.status != required_status or self.possible_causes:
+                raise ValueError(
+                    "out of scope crop requires matching status and no possible causes"
+                )
+        elif self.status not in ("suspected_disease", "healthy", "uncertain"):
+            raise ValueError("matched or unverified crop requires a normal status")
+        return self
+
+
+class MultiCropDiagnosisResponse(DiagnosisResponse):
+    result: MultiCropDiagnosisResult

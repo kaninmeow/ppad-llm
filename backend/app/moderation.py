@@ -7,10 +7,11 @@ import time
 from dataclasses import dataclass
 from uuid import uuid4
 
+from app.crops import CropId
 from app.errors import APIError
 from app.images import PreparedImage
 from app.qwen import QwenClient
-from app.schemas import DiagnosisResponse
+from app.schemas import DiagnosisResponse, MultiCropDiagnosisResponse
 from app.settings import Settings
 from app.wechat import WeChatClient, security_unavailable
 from app.wechat_callback import CallbackPayload
@@ -72,12 +73,19 @@ class Job:
     openid: str
     prepared: PreparedImage | None
     description: str
+    _version: int = 1
+    crop_id: CropId | None = None
     status: str = "checking"
     trace: str | None = None
-    response: DiagnosisResponse | None = None
+    response: DiagnosisResponse | MultiCropDiagnosisResponse | None = None
     error: Failure | None = None
     task: asyncio.Task | None = None
     submission: asyncio.Task | None = None
+
+    @property
+    def version(self) -> int:
+        """The result format survives input clearing and cannot be reassigned."""
+        return self._version
 
     @property
     def pending(self) -> bool:
@@ -119,6 +127,7 @@ class ModerationJobs:
         job.description = ""
         job.openid = ""
         job.media_token = ""
+        job.crop_id = None
 
     def _fail(self, job: Job, error: APIError):
         # A later signed non-pass revokes even a completed result. Rejection sticks.
@@ -137,7 +146,14 @@ class ModerationJobs:
         if job.trace is not None and self.traces.get(job.trace) is job:
             del self.traces[job.trace]
 
-    def reserve(self, openid: str, prepared: PreparedImage, description: str) -> Job:
+    def reserve(
+        self,
+        openid: str,
+        prepared: PreparedImage,
+        description: str,
+        *,
+        crop_id: CropId | None = None,
+    ) -> Job:
         self.cleanup()
         now = time.monotonic()
         if self.closed or now < self.overflow_until:
@@ -168,21 +184,33 @@ class ModerationJobs:
             openid=openid,
             prepared=prepared,
             description=description,
+            _version=1 if crop_id is None else 2,
+            crop_id=crop_id,
         )
         self.jobs[job.job_id] = job
         self.media[job.media_token] = job
         return job
 
-    async def submit(self, prepared: PreparedImage, description: str, code: str):
+    async def submit(
+        self,
+        prepared: PreparedImage,
+        description: str,
+        code: str,
+        *,
+        crop_id: CropId | None = None,
+    ):
         deadline = (
             asyncio.get_running_loop().time() + self.settings.moderation_job_ttl_seconds
         )
         openid = await self._login(code)
-        job = self.reserve(openid, prepared, description)
+        if crop_id is None:
+            job = self.reserve(openid, prepared, description)
+        else:
+            job = self.reserve(openid, prepared, description, crop_id=crop_id)
         job.submission = asyncio.create_task(self._submit(job, deadline))
         self._track(job.submission, openid)
         # Inputs now belong to the admitted job and its cancellable upstream work.
-        del prepared, description, code, openid
+        del prepared, description, code, openid, crop_id
         try:
             return await job.submission
         except asyncio.CancelledError:
@@ -266,11 +294,15 @@ class ModerationJobs:
         if self.closed or not job.pending or job.job_id not in self.jobs:
             raise job.error.exception() if job.error else security_unavailable()
 
-    def get(self, job_id: str, authorization: str) -> dict:
+    def get(self, job_id: str, authorization: str, *, version=1) -> dict:
         self.cleanup()
         job = self.jobs.get(job_id)
-        if job is None or not hmac.compare_digest(
-            authorization.encode(), ("Bearer " + job.token).encode()
+        if (
+            job is None
+            or job.version != version
+            or not hmac.compare_digest(
+                authorization.encode(), ("Bearer " + job.token).encode()
+            )
         ):
             raise not_found()
         if job.error is not None:
@@ -361,12 +393,19 @@ class ModerationJobs:
                 self._fail(job, security_unavailable())
                 return
             async with asyncio.timeout(WORK_TIMEOUT_SECONDS):
-                result = await self.qwen.diagnose(job.prepared, job.description)
+                if job.version == 2:
+                    result = await self.qwen.diagnose_crop(
+                        job.prepared, job.description, job.crop_id
+                    )
+                    response_type = MultiCropDiagnosisResponse
+                else:
+                    result = await self.qwen.diagnose(job.prepared, job.description)
+                    response_type = DiagnosisResponse
                 await self.wechat.check_text(
                     job.openid, "\n".join(strings(result.model_dump()))
                 )
                 if job.status == "analysing" and time.monotonic() < job.expires:
-                    job.response = DiagnosisResponse(
+                    job.response = response_type(
                         request_id=job.job_id,
                         model=self.settings.qwen_model,
                         elapsed_ms=int((time.monotonic() - job.created) * 1000),
